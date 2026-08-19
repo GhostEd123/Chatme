@@ -1,0 +1,22 @@
+[
+  { "name": "Afghanistan", "code": "AF", "flag": "🇦🇫", "dialCode": "+93" },
+  { "name": "Argentina", "code": "AR", "flag": "🇦🇷", "dialCode": "+54" },
+  { "name": "Australia", "code": "AU", "flag": "🇦🇺", "dialCode": "+61" },
+  { "name": "Brazil", "code": "BR", "flag": "🇧🇷", "dialCode": "+55" },
+  { "name": "Canada", "code": "CA", "flag": "🇨🇦", "dialCode": "+1" },
+  { "name": "China", "code": "CN", "flag": "🇨🇳", "dialCode": "+86" },
+  { "name": "France", "code": "FR", "flag": "🇫🇷", "dialCode": "+33" },
+  { "name": "Germany", "code": "DE", "flag": "🇩🇪", "dialCode": "+49" },
+  { "name": "India", "code": "IN", "flag": "🇮🇳", "dialCode": "+91" },
+  { "name": "Indonesia", "code": "ID", "flag": "🇮🇩", "dialCode": "+62" },
+  { "name": "Italy", "code": "IT", "flag": "🇮🇹", "dialCode": "+39" },
+  { "name": "Japan", "code": "JP", "flag": "🇯🇵", "dialCode": "+81" },
+  { "name": "Mexico", "code": "MX", "flag": "🇲🇽", "dialCode": "+52" },
+  { "name": "Nigeria", "code": "NG", "flag": "🇳🇬", "dialCode": "+234" },
+  { "name": "Russia", "code": "RU", "flag": "🇷🇺", "dialCode": "+7" },
+  { "name": "South Africa", "code": "ZA", "flag": "🇿🇦", "dialCode": "+27" },
+  { "name": "South Korea", "code": "KR", "flag": "🇰🇷", "dialCode": "+82" },
+  { "name": "Spain", "code": "ES", "flag": "🇪🇸", "dialCode": "+34" },
+  { "name": "United Kingdom", "code": "GB", "flag": "🇬🇧", "dialCode": "+44" },
+  { "name": "United States", "code": "US", "flag": "🇺🇸", "dialCode": "+1" }
+]

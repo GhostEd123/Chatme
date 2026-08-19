@@ -1,0 +1,155 @@
+@import "tailwindcss";
+@import "uniwind";
+
+@theme static {
+    /* 1. Map Semantic CSS variables (these change in light/dark mode) */
+    --color-primary: var(--color-primary);
+    --color-primary-light: var(--color-primary-light);
+    --color-primary-tint: var(--color-primary-tint);
+    --color-background: var(--color-background);
+    --color-surface: var(--color-surface);
+    --color-border: var(--color-border);
+    --color-foreground: var(--color-foreground);
+    --color-muted: var(--color-muted);
+
+    /* 2. Static Palette Colors (these never change) */
+
+    /* Primary */
+    --color-primary-50: #ddf1e5;
+    --color-primary-100: #e8f5ed;
+    --color-primary-200: #abdbbe;
+    --color-primary-300: #73c393;
+    --color-primary-400: #57b77d;
+    --color-primary-500: #499968;
+    --color-primary-600: #3a7a53;
+    --color-primary-700: #2b5c3f;
+    --color-primary-800: #1f2633;
+    --color-primary-900: #112519;
+
+    /* Neutral */
+    --color-neutral-50: #dde2e8;
+    --color-neutral-100: #b3c2ce;
+    --color-neutral-200: #8ea3b3;
+    --color-neutral-300: #6e8597;
+    --color-neutral-400: #6e8597;
+    --color-neutral-500: #3a566a;
+    --color-neutral-600: #1f3c51;
+    --color-neutral-700: #163043;
+    --color-neutral-800: #0f2637;
+    --color-neutral-900: #081c2c;
+
+    /* Gray */
+    --color-gray-2: #333333;
+
+    /* Other */
+    /* NOTE: these three match Neutral 50/100/200 exactly in the source file —
+       likely an unfilled Figma duplicate. Confirm before using in real UI. */
+    --color-success: #dde2e8;
+    --color-warning: #b3c2ce;
+    --color-danger: #8ea3b3;
+    --color-divider: #f2f5f8;
+    --color-bg-light: #f5f7f9;
+    --color-white: #ffffff;
+
+    /* Red */
+    --color-red-50: #fadcd8;
+    --color-red-100: #f7c5bd;
+    --color-red-200: #f4a79d;
+    --color-red-300: #fa6b52;
+    --color-red-400: #e8503a;
+
+    /* Blue (mislabeled "Red" in the source export) */
+    --color-blue-50: #ecf5ff;
+    --color-blue-100: #aad3ff;
+    --color-blue-200: #80bdff;
+    --color-blue-300: #55a8ff;
+    --color-blue-400: #007cff;
+
+    /* Orange */
+    --color-orange-50: #fff0d9;
+    --color-orange-100: #ffe5bf;
+    --color-orange-200: #ffd89f;
+    --color-orange-300: #ffcc7f;
+    --color-orange-400: #ffb23f;
+
+    --breakpoint-sm-tablet: 480px;
+    --breakpoint-lg-tablet: 769px;
+
+    /* Font families — one file per weight, register via expo-font */
+    --font-display-regular: "SFProDisplay-Regular";
+    --font-display-medium: "SFProDisplay-Medium";
+    --font-display-semibold: "SFProDisplay-Semibold";
+    --font-display-bold: "SFProDisplay-Bold";
+
+    /* Heading scale — H1–H6, all Bold in the kit, weight applied via font-display-bold */
+    --text-h1: 32px;
+    --text-h1--line-height: 1.25;
+    --text-h2: 28px;
+    --text-h2--line-height: 1.25;
+    --text-h3: 24px;
+    --text-h3--line-height: 1.25;
+    --text-h4: 20px;
+    --text-h4--line-height: 1.25;
+    --text-h5: 16px;
+    --text-h5--line-height: 1.25;
+    --text-h6: 14px;
+    --text-h6--line-height: 1.25;
+
+    /* Body scale — same size/line-height across Regular/Medium/Semibold weights */
+    /* NOTE: source sheet lists "Body Large / Semibold" twice (18px and 16px) —
+       likely a duplicate row. body-xl (18px) flagged for confirmation. */
+    --text-body-xl: 18px;
+    --text-body-xl--line-height: 1.5;
+    --text-body-lg: 16px;
+    --text-body-lg--line-height: 1.5;
+    --text-body-md: 14px;
+    --text-body-md--line-height: 1.5;
+    --text-body-md--letter-spacing: 0.5px;
+    --text-body-sm: 12px;
+    --text-body-sm--line-height: 1.5;
+
+    /* iOS system-style text */
+    --text-title2: 22px;
+    --text-title2--line-height: 28px;
+    --text-title2--letter-spacing: 0.35px;
+    --text-callout: 16px;
+    --text-callout--line-height: 21px;
+    --text-callout--letter-spacing: -0.32px;
+
+    /* Component-specific */
+    --text-button: 14px;
+    --text-button--line-height: 1.5;
+    --text-button-sm: 12px;
+    --text-button-sm--line-height: 1.5;
+}
+
+@layer theme {
+    :root {
+        @variant light {
+            /* Brand */
+            --color-primary: #57b77d;
+            --color-primary-light: #abdbbe;
+            --color-primary-tint: #f5fbf7;
+            /* Surfaces */
+            --color-background: #f5f7f9;
+            --color-surface: #ffffff;
+            --color-border: #eaeef2;
+            /* Text */
+            --color-foreground: #000000;
+            --color-muted: #6e8597;
+        }
+        @variant dark {
+            /* Brand */
+            --color-primary: #57b77d;
+            --color-primary-light: #abdbbe;
+            --color-primary-tint: #163043;
+            /* Surfaces */
+            --color-background: #081c2c;
+            --color-surface: #163043;
+            --color-border: #1f3c51;
+            /* Text */
+            --color-foreground: #ffffff;
+            --color-muted: #3a566a;
+        }
+    }
+}

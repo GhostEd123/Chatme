@@ -1,0 +1,6 @@
+minimumReleaseAge: 1440
+minimumReleaseAgeExclude:
+  - core-js-compat@3.50.0
+  - terser@5.49.2
+onlyBuiltDependencies:
+  - esbuild

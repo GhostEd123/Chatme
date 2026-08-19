@@ -1,0 +1,54 @@
+# Chatme Project Architecture and Folder Structure
+
+This document explains the folder-based architecture and state management approach used in the Chatme React Native project.
+
+## 1. State Management (Zustand + MMKV)
+
+We use **Zustand** for global state management, combined with **react-native-mmkv** for blazing-fast, synchronous local persistence.
+
+- **Store Locations:** Stores are domain-specific and located within their respective feature folders (e.g., `src/features/auth/store/authStore.ts`, `src/features/chats/store/chatStore.ts`).
+- **Persistence:** Zustand's `persist` middleware is used to automatically save the state to local storage using MMKV. This ensures the user remains logged in and data like chat histories and PIN codes persist across app restarts.
+- **Why Zustand?** Zustand is lightweight, avoids boilerplate (unlike Redux), and hooks directly into React components easily, which is ideal for this project's requirements.
+
+## 2. Folder Structure Overview
+
+The project uses a feature-based folder structure combined with Expo Router's file-based routing.
+
+### `src/app/`
+This folder handles the routing of the application using **Expo Router**.
+- `(auth)`: Contains screens for the unauthenticated flow (Login, Verify, Name, Upload).
+- `(tabs)`: Contains the authenticated tab-based navigation (Calls, Chats, Settings).
+- `_layout.tsx`: Root layout defining navigation contexts and root providers.
+
+### `src/features/`
+This is where the core logic and UI of the application are organized by domain (feature).
+Each feature encapsulates its own screens, components, hooks, schemas, and stores.
+
+- **`auth/`**: Everything related to user authentication and profile setup.
+  - `components/`: UI components specific to auth (e.g., Blueprint, CountryPicker).
+  - `screens/`: Screen layouts (Login, Verify, Name, Upload).
+  - `store/`: Zustand stores for auth state (e.g., `authStore.ts`).
+  - `schemas/`: Zod schemas for form validation.
+- **`home/`** (or `chats/`): Logic for the main chat interface and pin setup.
+- **`welcome/`**: The initial onboarding/welcome screen.
+
+### `src/shared/`
+Contains components, constants, types, and hooks that are shared globally across multiple features.
+- **`components/`**: Generic, reusable UI components (e.g., ThemedButton, Spacer).
+- **`widgets/`**: High-level, complex reusable components (e.g., NumpadWidget, AvatarWidget, ChatListItemWidget) that compose multiple smaller elements and are reused across different screens.
+- **`constants/`**: Global constants, image paths, configuration.
+- **`utils/`**: Helper functions (e.g., phone formatting, date formatting).
+
+### `src/core/`
+Contains app-wide configurations and core initializations.
+- **`lib/`**: Core library initializations (e.g., `storage.ts` for MMKV).
+- **`providers/`**: Global context providers (e.g., React Query, Theme).
+
+### `src/assets/`
+Contains static assets like images, icons (SVGs), and fonts.
+
+## 3. The "Widgets" Approach
+
+To prevent repeating code, complex UI blocks are extracted into **Widgets** inside `src/shared/widgets/`.
+- **Widgets vs Components:** A component might be a simple button (`ThemedButton`). A widget is a composite element with specific layout or logic (like `NumpadWidget` for PIN/Phone entry, or `ChatListItemWidget` for a swipeable row with an avatar and message snippet).
+- By organizing these in `src/shared/widgets/`, any feature (Auth, Settings, Home) can drop in these pre-styled, functional blocks, ensuring a consistent Light/Dark mode design across the app.
