@@ -4,7 +4,7 @@ export const colors = {
   primary: {
     50: "#F5FBF7",
     200: "#ABDBBE",
-    400: "#57B77D", // Primary/400 - Primary (main brand green)
+    400: "#57B77D", 
   },
   neutral: {
     50: "#DDE2E8",

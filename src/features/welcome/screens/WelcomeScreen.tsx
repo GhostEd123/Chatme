@@ -17,7 +17,13 @@ export default function WelcomeScreen() {
             resizeMode="contain"
           />
         </View>
-        <View className=" hidden dark:block">{/* <IllDark /> */}</View>
+        <View className=" hidden dark:block">
+          <Image
+            source={IMAGES.onboarding}
+            className=" h-[370px]"
+            resizeMode="contain"
+          />
+        </View>
         <View className="items-center w-full pb-safe-offset-5">
           <Text className=" font-display-bold mb-4 text-h3 dark:text-white text-neutral-900 text-center max-w-82 ">
             Stay connected with your friends and family

@@ -1,9 +1,4 @@
-import { Text, View } from "react-native";
-
+import SettingsScreen from "@/features/settings/screens/SettingsScreen";
 export default function Index() {
-  return (
-    <View>
-      <Text>Index</Text>
-    </View>
-  );
+  return <SettingsScreen />;
 }

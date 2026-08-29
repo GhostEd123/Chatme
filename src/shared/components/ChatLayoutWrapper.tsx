@@ -18,6 +18,8 @@ type ChatLayoutWrapperProps = {
   containerStyle?: StyleProp<ViewStyle>;
   /** Disable tap-outside-to-dismiss behavior if needed */
   dismissOnTap?: boolean;
+  /** Disable the bottom safe area inset padding if the screen has a bottom tab bar */
+  disableBottomSafeArea?: boolean;
 };
 const ChatLayoutWrapper = ({
   children,
@@ -25,6 +27,7 @@ const ChatLayoutWrapper = ({
   bottomWidget,
   containerStyle,
   dismissOnTap = true,
+  disableBottomSafeArea = false,
 }: ChatLayoutWrapperProps) => {
   const insets = useSafeAreaInsets();
 
@@ -57,7 +60,7 @@ const ChatLayoutWrapper = ({
         <View
           className="bg-background"
           style={{
-            paddingBottom: bottomWidget ? 0 : insets.bottom,
+            paddingBottom: bottomWidget || disableBottomSafeArea ? 0 : insets.bottom,
           }}
         >
           {bottomInput}

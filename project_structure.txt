@@ -18,6 +18,8 @@ The project uses a feature-based folder structure combined with Expo Router's fi
 This folder handles the routing of the application using **Expo Router**.
 - `(auth)`: Contains screens for the unauthenticated flow (Login, Verify, Name, Upload).
 - `(tabs)`: Contains the authenticated tab-based navigation (Calls, Chats, Settings).
+  - `chats/`: Contains nested chat routing (e.g., `[id].tsx` for Chat Detail, `new.tsx` for New Message).
+  - `settings/`: Contains nested settings routing (e.g., `profile.tsx`, `privacy/`, `data-storage/`).
 - `_layout.tsx`: Root layout defining navigation contexts and root providers.
 
 ### `src/features/`
@@ -29,7 +31,8 @@ Each feature encapsulates its own screens, components, hooks, schemas, and store
   - `screens/`: Screen layouts (Login, Verify, Name, Upload).
   - `store/`: Zustand stores for auth state (e.g., `authStore.ts`).
   - `schemas/`: Zod schemas for form validation.
-- **`home/`** (or `chats/`): Logic for the main chat interface and pin setup.
+- **`home/`** (or `chats/`): Logic for the main chat interface, pin setup, and chat details.
+- **`settings/`**: Everything related to app settings, profile, appearance, privacy, and data storage.
 - **`welcome/`**: The initial onboarding/welcome screen.
 
 ### `src/shared/`

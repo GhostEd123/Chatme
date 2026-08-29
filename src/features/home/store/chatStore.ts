@@ -5,7 +5,7 @@ import { createJSONStorage, persist } from "zustand/middleware";
 const zustandMmkvStorage = {
   setItem: (name: string, value: string) => storage.set(name, value),
   getItem: (name: string) => storage.getString(name) ?? null,
-  removeItem: (name: string) => storage.delete(name),
+  removeItem: (name: string) => storage.remove(name),
 };
 
 export type Chat = {

@@ -22,7 +22,6 @@ export default function CameraCapture({
   const cameraRef = useRef<CameraView>(null);
 
   if (visible && !permission?.granted) {
-    // Fire off the request; render nothing until the user responds.
     requestPermission();
   }
 

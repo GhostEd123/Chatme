@@ -1,18 +1,24 @@
-import React from "react";
-import { View, Text } from "react-native";
+import React, { useRef } from "react";
+import { View, Text, TextInput, Pressable } from "react-native";
 import { cn } from "tailwind-variants";
 
 type StyledOtpInputProps = {
   value: string;
+  onChangeText?: (text: string) => void;
   length?: number;
 };
 
-export default function StyledOtpInput({ value, length = 4 }: StyledOtpInputProps) {
+export default function StyledOtpInput({ value, onChangeText, length = 4 }: StyledOtpInputProps) {
   const cells = Array.from({ length }).map((_, i) => i);
+  const inputRef = useRef<TextInput>(null);
+
+  const handlePress = () => {
+    inputRef.current?.focus();
+  };
 
   return (
     <View className="w-full px-4 my-6">
-      <View className="flex-row justify-between w-full">
+      <Pressable onPress={handlePress} className="flex-row justify-between w-full">
         {cells.map((i) => {
           const digit = value[i] || "";
           const isFocused = value.length === i;
@@ -36,7 +42,16 @@ export default function StyledOtpInput({ value, length = 4 }: StyledOtpInputProp
             </View>
           );
         })}
-      </View>
+      </Pressable>
+      <TextInput
+        ref={inputRef}
+        value={value}
+        onChangeText={onChangeText}
+        keyboardType="number-pad"
+        maxLength={length}
+        className="absolute opacity-0 w-0 h-0"
+        autoFocus
+      />
     </View>
   );
 }

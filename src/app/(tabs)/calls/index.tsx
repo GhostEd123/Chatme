@@ -1,9 +1,4 @@
-import { Text, View } from "react-native";
-
+import CallsScreen from "@/features/home/screens/CallsScreen";
 export default function Index() {
-  return (
-    <View>
-      <Text>Index</Text>
-    </View>
-  );
+  return <CallsScreen />;
 }

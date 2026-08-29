@@ -1,5 +1,5 @@
 import Spacer from "@/shared/components/Spacer";
-import { formatPhoneInternational } from "@/shared/utils/formatPhoneNumber";
+
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useRouter } from "expo-router";
 import { Controller, useForm } from "react-hook-form";
@@ -11,7 +11,6 @@ import {
   LoginFormOutput,
   loginSchema,
 } from "../schemas/loginSchema";
-import NumpadWidget from "@/shared/widgets/NumpadWidget";
 import { useAuthStore } from "../store/authStore";
 
 const LoginScreen = () => {
@@ -31,22 +30,16 @@ const LoginScreen = () => {
   const router = useRouter();
   const { updateUser } = useAuthStore();
   const onSubmit = (data: LoginFormOutput) => {
-    const e164 = `${data.country.dialCode}${data.phone.replace(/\D/g, "")}`;
+    let digits = data.phone.replace(/\D/g, "");
+    if (data.country.code === "NG" && digits.startsWith("0")) {
+      digits = digits.substring(1);
+    }
+    const e164 = `${data.country.dialCode}${digits}`;
     updateUser({ phone: e164 });
     router.navigate("/(auth)/verify");
   };
   const onError = (errors: any) => {
     console.log("Validation Failed!", errors);
-  };
-
-  const handleNumpadPress = (val: string) => {
-    const current = control._formValues.phone || "";
-    setValue("phone", current + val, { shouldValidate: true });
-  };
-
-  const handleNumpadBackspace = () => {
-    const current = control._formValues.phone || "";
-    setValue("phone", current.slice(0, -1), { shouldValidate: true });
   };
 
   return (
@@ -56,12 +49,6 @@ const LoginScreen = () => {
       buttonProps={{
         onPress: handleSubmit(onSubmit, onError),
       }}
-      bottomWidget={
-        <NumpadWidget
-          onPress={handleNumpadPress}
-          onBackspace={handleNumpadBackspace}
-        />
-      }
     >
       <View className="flex-1">
         <Text className="text-body-md font-display-medium text-neutral-600 dark:text-neutral-50 px-1">
@@ -74,11 +61,10 @@ const LoginScreen = () => {
           render={({ field: { value, onChange } }) => (
             <CountryPicker
               value={value}
-              onChangeText={(text) => onChange(formatPhoneInternational(text))}
+              onChangeText={(text) => onChange(text.replace(/\D/g, ""))}
               onCountryChange={(country) =>
                 setValue("country", country, { shouldValidate: true })
               }
-              disableNativeKeyboard
             />
           )}
         />

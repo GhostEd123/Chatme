@@ -5,7 +5,7 @@ import { createJSONStorage, persist } from "zustand/middleware";
 const zustandMmkvStorage = {
   setItem: (name: string, value: string) => storage.set(name, value),
   getItem: (name: string) => storage.getString(name) ?? null,
-  removeItem: (name: string) => storage.delete(name),
+  removeItem: (name: string) => storage.remove(name),
 };
 
 export type User = {
@@ -29,7 +29,7 @@ export const useAuthStore = create<AuthState>()(
       setUser: (user) => set({ user }),
       updateUser: (data) =>
         set((state) => ({
-          user: state.user ? { ...state.user, ...data } : null,
+          user: state.user ? { ...state.user, ...data } : ({ id: "", name: "", phone: "", ...data } as User),
         })),
     }),
     {

@@ -14,7 +14,6 @@ const UniMaterialIcons = withUniwind(MaterialIcons);
 
 const TOAST_STATE = {
   success: {
-    // Light mode uses global.css | Dark mode uses your custom HSLs
     container:
       "bg-primary-50 border-primary-200 dark:bg-[hsl(150,100%,6%)] dark:border-[hsl(147,100%,12%)]",
     textClass: "text-primary-600 dark:text-[hsl(150,86%,65%)]",
