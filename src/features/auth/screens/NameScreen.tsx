@@ -3,21 +3,37 @@ import Spacer from "@/shared/components/Spacer";
 import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import { useRouter } from "expo-router";
 import { useState } from "react";
-import { Text, TextInput, View } from "react-native";
+import { Text, TextInput, View, Alert } from "react-native";
 import { cn } from "tailwind-variants";
 import { withUniwind } from "uniwind";
+import { useUpdateProfile } from "@/features/settings/hooks/useProfile";
 
 const Icon = withUniwind(FontAwesome6);
 export default function NameScreen() {
   const router = useRouter();
   const [isFocused, setIsFocused] = useState(false);
+  const [name, setName] = useState("");
+  const updateProfile = useUpdateProfile();
+
+  const handleNext = async () => {
+    if (!name.trim()) return;
+    try {
+      await updateProfile.mutateAsync({ displayName: name.trim() });
+      router.push("/(auth)/upload");
+    } catch (err: any) {
+      Alert.alert("Error", err?.message ?? "Failed to save your name.");
+    }
+  };
+
   return (
     <AuthTemplate
       goBack
       title="What's your name?"
       description="Write your name. You can change it back in settings."
       buttonProps={{
-        onPress: () => router.navigate("/upload"),
+        onPress: handleNext,
+        disabled: !name.trim() || updateProfile.isPending,
+        label: updateProfile.isPending ? "Saving..." : "Continue",
       }}
     >
       <View className="flex-1">
@@ -45,6 +61,9 @@ export default function NameScreen() {
             onFocus={() => setIsFocused(true)}
             onBlur={() => setIsFocused(false)}
             placeholder="Name"
+            value={name}
+            onChangeText={setName}
+            editable={!updateProfile.isPending}
           />
         </View>
       </View>

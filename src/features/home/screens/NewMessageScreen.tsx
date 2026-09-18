@@ -15,6 +15,8 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { withUniwind } from "uniwind";
+import { useMatchContacts } from "@/features/home/hooks/useMatchContacts";
+import { useCreateDirectConversation } from "@/features/home/hooks/useCreateDirectConversation";
 
 const StyledFeather = withUniwind(Feather);
 
@@ -55,6 +57,10 @@ export default function NewMessageScreen() {
     "loading" | "granted" | "denied"
   >("loading");
 
+  const matchContacts = useMatchContacts();
+  const createDirect = useCreateDirectConversation();
+  const [isMatching, setIsMatching] = useState(false);
+
   // ── Load contacts ──
   useEffect(() => {
     (async () => {
@@ -64,23 +70,36 @@ export default function NewMessageScreen() {
         return;
       }
       setPermissionStatus("granted");
+      setIsMatching(true);
+
       const { data } = await Contacts.getContactsAsync({
         fields: [
           Contacts.Fields.Name,
           Contacts.Fields.PhoneNumbers,
-          Contacts.Fields.Image,
         ],
-        sort: Contacts.SortTypes.FirstName,
       });
-      const mapped: ContactItem[] = data
-        .filter((c) => c.name)
-        .map((c) => ({
-          id: c.id ?? Math.random().toString(),
-          name: c.name!,
-          phone: c.phoneNumbers?.[0]?.number ?? "",
-          imageUri: c.image?.uri,
-        }));
-      setAllContacts(mapped);
+      
+      const phoneNumbers = data
+        .flatMap((c) => c.phoneNumbers?.map((p) => p.number) ?? [])
+        .filter(Boolean) as string[];
+
+      const uniquePhones = Array.from(new Set(phoneNumbers));
+
+      if (uniquePhones.length > 0) {
+        try {
+          const res = await matchContacts.mutateAsync(uniquePhones);
+          const mapped: ContactItem[] = res.matches.map((m) => ({
+            id: m.user.id,
+            name: m.user.displayName || "Unknown User",
+            phone: m.matchedPhoneNumber,
+            imageUri: m.user.avatarUrl || undefined,
+          }));
+          setAllContacts(mapped);
+        } catch (err) {
+          console.error("Failed to match contacts", err);
+        }
+      }
+      setIsMatching(false);
     })();
   }, []);
 
@@ -98,10 +117,15 @@ export default function NewMessageScreen() {
   }, [allContacts, search]);
 
   const handleContactPress = useCallback(
-    (contact: ContactItem) => {
-      router.navigate(`/chats/${contact.id}`);
+    async (contact: ContactItem) => {
+      try {
+        const conv = await createDirect.mutateAsync({ participantId: contact.id });
+        router.navigate(`/chats/${conv.id}`);
+      } catch (err) {
+        console.error("Failed to start conversation", err);
+      }
     },
-    [router],
+    [router, createDirect]
   );
 
   // ── Render item ──
@@ -141,14 +165,14 @@ export default function NewMessageScreen() {
   );
 
   // ── States ──
-  if (permissionStatus === "loading") {
+  if (permissionStatus === "loading" || isMatching) {
     return (
       <View className="flex-1 bg-background">
         <ContactsHeader router={router} search={search} setSearch={setSearch} />
         <View className="flex-1 items-center justify-center">
           <ActivityIndicator size="large" color="#57b77d" />
           <Text className="mt-3 text-body-md text-muted font-display-medium">
-            Loading contacts…
+            {isMatching ? "Finding friends on ChatMe…" : "Loading contacts…"}
           </Text>
         </View>
       </View>

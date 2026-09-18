@@ -1,0 +1,744 @@
+================================================================================
+CHATME — SOCKET.IO + REST API FULL INTEGRATION
+Change Log (file by file)
+Generated: 2026-09-09
+================================================================================
+
+
+────────────────────────────────────────────────────────────────────────────────
+NEWLY INSTALLED PACKAGES
+────────────────────────────────────────────────────────────────────────────────
+
+  socket.io-client@4.8.3
+    - The official Socket.IO v4 JavaScript client.
+    - Used to connect to the /chat namespace on the backend over WebSocket.
+    - Installed with: npx pnpm add socket.io-client
+
+  react-native-get-random-values@2.0.0
+    - Polyfill that provides a secure random byte source for React Native,
+      required by any UUID or crypto library that calls crypto.getRandomValues().
+    - Installed with: npx pnpm add react-native-get-random-values
+
+  uuid@14.0.2
+    - UUID generation library (installed but not imported directly;
+      a lightweight inline helper is used instead to avoid bundler issues).
+    - Installed with: npx pnpm add uuid
+
+
+────────────────────────────────────────────────────────────────────────────────
+NEW FILE: src/shared/constants/config.ts
+────────────────────────────────────────────────────────────────────────────────
+
+Purpose:
+  Single source of truth for all backend URL constants so they never
+  need to be typed more than once anywhere in the codebase.
+
+What it contains:
+  - API_BASE_URL  — "https://chateo-lhuw.onrender.com/v1"
+                    Base URL prepended to every REST API call.
+
+  - SOCKET_URL    — "wss://chateo-lhuw.onrender.com/chat"
+                    The Socket.IO namespace URL (uses WSS for TLS).
+
+  - SOCKET_PATH   — "/socket.io"
+                    The handshake path. Must NOT be changed to /chat;
+                    the namespace is already baked into SOCKET_URL.
+
+
+────────────────────────────────────────────────────────────────────────────────
+NEW FILE: src/core/lib/apiClient.ts
+────────────────────────────────────────────────────────────────────────────────
+
+Purpose:
+  A thin fetch-based HTTP client used by all React Query hooks instead of
+  axios. Handles authentication and token refresh transparently.
+
+Key behaviours:
+
+  1. Auto-attaches the Authorization header
+     Every request (unless skipAuth: true is passed) reads the current
+     accessToken from authStore and sets:
+       Authorization: Bearer <token>
+
+  2. Automatic 401 → token refresh → retry
+     If the server responds with HTTP 401, apiClient calls a private
+     refreshAccessToken() function which:
+       a. Reads the refreshToken from authStore.
+       b. POSTs to /auth/refresh.
+       c. On success: calls updateAccessToken() in authStore and retries
+          the original request with the new token.
+       d. On failure: calls clearSession() to log the user out.
+
+  3. ApiException class
+     If the response is still not OK after the refresh attempt, it throws
+     an ApiException with { status, code, message } so React Query
+     can surface the error correctly.
+
+  4. 204 No Content support
+     Returns undefined for 204 responses (used by logout and delete
+     endpoints) without attempting to parse JSON.
+
+  Usage:
+    apiRequest<T>(path, { method, body, headers, skipAuth })
+
+
+────────────────────────────────────────────────────────────────────────────────
+NEW FILE: src/core/lib/socketService.ts
+────────────────────────────────────────────────────────────────────────────────
+
+Purpose:
+  A singleton class (exported as socketService) that owns the one and only
+  Socket.IO connection for the entire app lifetime. Screens and hooks never
+  create their own socket — they interact through this service.
+
+Key behaviours:
+
+  1. connect(token)
+     Creates a socket.io-client Socket connected to SOCKET_URL with:
+       - transports: ['websocket']   (no long-polling; as required by server)
+       - auth: { token }             (JWT passed in handshake auth object)
+       - reconnection: false         (manual reconnection for token refresh)
+       - timeout: 90_000             (accounts for Render free-tier cold start)
+
+  2. Server event → socketStore
+     After connecting, attaches listeners for all 5 server events and routes
+     them to the appropriate Zustand action in socketStore:
+       - message.created   → store.pushIncomingMessage()
+       - presence.changed  → store.applyPresenceChanged()
+       - typing.started    → store.applyTypingStarted()
+       - typing.stopped    → store.applyTypingStopped()
+       - receipt.delivered } (registered but left for screens/hooks to handle
+       - receipt.read      }  via query invalidation)
+
+  3. connect_error + disconnect handling
+     When the server closes the socket (token expired or invalid):
+       a. Reads refreshToken from authStore.
+       b. Calls POST /auth/refresh directly (without apiClient to avoid
+          circular dependency).
+       c. On success: saves the new token and reconnects after 1 second.
+       d. On failure: calls clearSession() to send the user to login.
+
+  4. emit(event, payload)
+     Returns a Promise<AckResponse> for all client commands that require
+     acknowledgement (presence.subscribe, presence.unsubscribe,
+     typing.start, typing.stop).
+
+  5. disconnect()
+     Removes all listeners, calls socket.disconnect(), and sets
+     socketStore.connected = false.
+
+
+────────────────────────────────────────────────────────────────────────────────
+NEW FILE: src/core/store/socketStore.ts
+────────────────────────────────────────────────────────────────────────────────
+
+Purpose:
+  An in-memory Zustand store (NOT persisted to MMKV) that holds the
+  current real-time state for the app. It is updated exclusively by
+  socketService and read by hooks/screens.
+
+State shape:
+
+  connected: boolean
+    Whether the socket is currently connected.
+
+  conversations: Record<conversationId, ConversationRealtimeState>
+    A map from conversation ID to:
+      - participants: ParticipantPresence[]   (userId + status online/offline)
+      - typing: TypingUser[]                  (userId + expiresAt ISO string)
+    Populated after a successful presence.subscribe acknowledgement.
+
+  incomingMessages: Record<conversationId, MessageCreatedEvent[]>
+    Accumulates message.created events from the socket so ChatDetailScreen
+    can merge them into the React Query cache. Cleared after consumption.
+
+Actions:
+  setConnected(bool)
+  subscribeConversation(id, { participants, typing })
+  unsubscribeConversation(id)
+  applyPresenceChanged(event)   — updates a single participant's status
+  applyTypingStarted(event)     — upserts a TypingUser entry
+  applyTypingStopped(event)     — removes a TypingUser entry
+  pushIncomingMessage(event)    — appends (deduplicates by id)
+  clearIncomingMessages(id)     — called by ChatDetailScreen after merge
+
+
+────────────────────────────────────────────────────────────────────────────────
+NEW FILE: src/core/providers/SocketProvider.tsx
+────────────────────────────────────────────────────────────────────────────────
+
+Purpose:
+  A React component (no UI, side-effects only) that manages the socket
+  connection lifecycle in response to auth state changes.
+
+How it works:
+  - Subscribes to accessToken from authStore via Zustand selector.
+  - useEffect runs whenever accessToken changes:
+      If accessToken is truthy  → socketService.connect(accessToken)
+      If accessToken is null    → socketService.disconnect()
+  - On unmount (app teardown)  → socketService.disconnect()
+
+This means:
+  - The socket connects automatically the moment the user logs in and
+    tokens are saved.
+  - The socket disconnects immediately when the user logs out and
+    clearSession() is called.
+  - If the token is silently refreshed, SocketProvider re-runs and
+    reconnects with the new token.
+
+
+────────────────────────────────────────────────────────────────────────────────
+NEW FILE: src/features/auth/hooks/useRequestOtp.ts
+────────────────────────────────────────────────────────────────────────────────
+
+Purpose:
+  React Query mutation for the first step of OTP login.
+
+API call:
+  POST /auth/otp/request
+  Body: { phoneNumber: string }   (E.164 format, e.g. "+2348012345678")
+
+Returns:
+  { challengeId, phoneNumberMasked, expiresInSeconds, resendInSeconds,
+    codeLength }
+
+Usage:
+  const requestOtp = useRequestOtp();
+  await requestOtp.mutateAsync({ phoneNumber: "+2348012345678" });
+
+
+────────────────────────────────────────────────────────────────────────────────
+NEW FILE: src/features/auth/hooks/useVerifyOtp.ts
+────────────────────────────────────────────────────────────────────────────────
+
+Purpose:
+  React Query mutation for the second step of OTP login (code verification).
+
+API call:
+  POST /auth/otp/verify
+  Body: { challengeId, code, device: { name, platform } }
+
+On success:
+  - Calls authStore.setTokens(accessToken, refreshToken)
+    → persists both tokens to MMKV via Zustand persist middleware.
+  - Calls authStore.setUser({ id, name, phone, photo })
+    → maps the API user shape to the local User shape.
+  - Because accessToken is now set, SocketProvider picks it up and
+    socketService.connect() is called automatically.
+
+
+────────────────────────────────────────────────────────────────────────────────
+NEW FILE: src/features/auth/hooks/useLogout.ts
+────────────────────────────────────────────────────────────────────────────────
+
+Purpose:
+  React Query mutation for logging out.
+
+Steps:
+  1. Best-effort POST /auth/logout with the current refreshToken
+     (errors are swallowed so the user is always logged out locally).
+  2. socketService.disconnect() — closes the socket cleanly.
+  3. authStore.clearSession()   — wipes user, accessToken, refreshToken,
+     and challengeId from MMKV.
+
+
+────────────────────────────────────────────────────────────────────────────────
+NEW FILE: src/features/home/hooks/useConversations.ts
+────────────────────────────────────────────────────────────────────────────────
+
+Purpose:
+  React Query query hook for the authenticated user's conversation list.
+
+API call:
+  GET /conversations
+
+Returns:
+  An array of Conversation objects, each containing:
+    id, kind (direct|group), participants[], lastMessage, unreadCount,
+    updatedAt
+
+Cache:
+  staleTime: 30 seconds
+  queryKey: ["conversations"]
+
+
+────────────────────────────────────────────────────────────────────────────────
+NEW FILE: src/features/home/hooks/useMessages.ts
+────────────────────────────────────────────────────────────────────────────────
+
+Purpose:
+  React Query query hook for the messages in a single conversation.
+
+API call:
+  GET /conversations/:conversationId/messages
+
+Returns:
+  An array of Message objects:
+    id, conversationId, clientMessageId, senderId, kind, text, createdAt
+
+Cache:
+  staleTime: 10 seconds
+  queryKey: ["messages", conversationId]
+  disabled when conversationId is empty
+
+
+────────────────────────────────────────────────────────────────────────────────
+NEW FILE: src/features/home/hooks/useSendMessage.ts
+────────────────────────────────────────────────────────────────────────────────
+
+Purpose:
+  React Query mutation for sending a new text message.
+
+API call:
+  POST /conversations/:conversationId/messages
+  Body: { clientMessageId, text }
+
+Optimistic update:
+  On success, the returned Message is immediately appended to the
+  ["messages", conversationId] React Query cache so the UI updates
+  without a round-trip.
+
+  Also invalidates ["conversations"] so the chat list's lastMessage
+  snippet updates.
+
+clientMessageId:
+  Generated by a lightweight inline UUID v4 helper (avoids bundler
+  issues with the uuid package in React Native).
+
+
+────────────────────────────────────────────────────────────────────────────────
+NEW FILE: src/features/home/hooks/useReceipts.ts
+────────────────────────────────────────────────────────────────────────────────
+
+Purpose:
+  Two React Query mutations for marking messages as delivered and read.
+
+useMarkDelivered:
+  PUT /conversations/:id/receipts/delivered
+  Body: { throughMessageId }
+  On success: invalidates ["conversations"] and ["messages", id]
+
+useMarkRead:
+  PUT /conversations/:id/receipts/read
+  Body: { throughMessageId }
+  On success: invalidates ["conversations"] and ["messages", id]
+
+Note:
+  The server emits receipt.delivered and receipt.read socket events to
+  ALL participants (including the sender) after these REST calls succeed.
+
+
+────────────────────────────────────────────────────────────────────────────────
+NEW FILE: src/features/home/hooks/useConversationRealtime.ts
+────────────────────────────────────────────────────────────────────────────────
+
+Purpose:
+  Custom hook that manages the real-time presence and typing subscription
+  for a single conversation screen.
+
+Lifecycle:
+  - On mount: emits presence.subscribe to the server via socketService.emit().
+    On acknowledgement, saves the initial participants and typing list into
+    socketStore via subscribeConversation().
+  - On unmount: emits presence.unsubscribe and calls unsubscribeConversation()
+    to clean up the socketStore entry.
+
+Returns:
+  participants: ParticipantPresence[]
+    Live list of { userId, status } for every participant in the conversation.
+
+  typingUsers: TypingUser[]
+    Live list of { userId, expiresAt } for users currently typing.
+
+  startTyping()
+    Emits typing.start. Should be called on every text change while there
+    is content. A real app refreshes this every ~3 seconds while the user
+    keeps typing (the server expires typing after 5 seconds).
+
+  stopTyping()
+    Emits typing.stop. Called on text clear or input blur.
+
+
+────────────────────────────────────────────────────────────────────────────────
+MODIFIED FILE: src/features/auth/store/authStore.ts
+────────────────────────────────────────────────────────────────────────────────
+
+Changes:
+
+  New fields added to AuthState:
+    accessToken: string | null
+      The current JWT access token (expires in 900 seconds).
+      Persisted to MMKV via Zustand persist middleware.
+
+    refreshToken: string | null
+      The long-lived refresh token (expires in 30 days).
+      Persisted to MMKV via Zustand persist middleware.
+
+    challengeId: string | null
+      Transient OTP challenge ID passed from LoginScreen to VerifyScreen.
+      Persisted (so it survives a quick background/foreground), but
+      always cleared after a successful verify.
+
+  New actions:
+    setTokens(accessToken, refreshToken)
+      Called by useVerifyOtp on successful login.
+
+    updateAccessToken(accessToken)
+      Called by apiClient's refresh interceptor and socketService
+      after a silent token refresh.
+
+    setChallengeId(id | null)
+      Called by LoginScreen (set) and VerifyScreen (clear).
+
+    clearSession()
+      Resets user, accessToken, refreshToken, and challengeId to null.
+      Called by useLogout and on refresh failure.
+
+
+────────────────────────────────────────────────────────────────────────────────
+MODIFIED FILE: src/core/providers/AppProviders.tsx
+────────────────────────────────────────────────────────────────────────────────
+
+Change:
+  Added SocketProvider as a wrapper around children inside the
+  KeyboardProvider. This ensures the socket connects as soon as any
+  screen is mounted and the user has a valid accessToken.
+
+  Tree before:
+    <PersistQueryClientProvider>
+      <SafeAreaProvider>
+        <KeyboardProvider>
+          {children}
+
+  Tree after:
+    <PersistQueryClientProvider>
+      <SafeAreaProvider>
+        <KeyboardProvider>
+          <SocketProvider>       ← NEW
+            {children}
+
+
+────────────────────────────────────────────────────────────────────────────────
+MODIFIED FILE: src/features/auth/screens/LoginScreen.tsx
+────────────────────────────────────────────────────────────────────────────────
+
+Changes:
+  - Imports useRequestOtp hook.
+  - The onSubmit handler is now async and calls:
+      requestOtp.mutateAsync({ phoneNumber: e164 })
+  - On success: stores challengeId via authStore.setChallengeId(),
+    then navigates to /(auth)/verify.
+  - On error: shows an Alert with the server's error message.
+  - Button is disabled while the request is in flight (isPending).
+  - Shows an ActivityIndicator + "Sending code…" text during loading.
+
+  No changes to the form layout, validation schema, or country picker.
+
+
+────────────────────────────────────────────────────────────────────────────────
+MODIFIED FILE: src/features/auth/screens/VerifyScreen.tsx
+────────────────────────────────────────────────────────────────────────────────
+
+Changes:
+  - Imports useVerifyOtp hook.
+  - Reads challengeId from authStore (set by LoginScreen).
+  - The "Next" button now calls handleVerify() which:
+      1. Calls verifyOtp.mutateAsync({ challengeId, code, device })
+         where device is auto-detected from Platform.OS.
+      2. On success: clears challengeId, then routes based on the
+         server's user.profileComplete flag:
+           - profileComplete & displayName set → router.replace("/chats")
+           - otherwise → router.navigate("/(auth)/name")
+      3. On error: shows an Alert.
+  - Button disabled while isPending or code.length < 4.
+  - Shows ActivityIndicator + "Verifying…" in place of the resend timer
+    while the request is in flight.
+
+
+────────────────────────────────────────────────────────────────────────────────
+MODIFIED FILE: src/features/home/screens/ChatsScreen.tsx
+────────────────────────────────────────────────────────────────────────────────
+
+Changes:
+  - Imports useConversations hook.
+  - Removes direct use of chatStore.chats for the list (chatStore
+    actions for mute/pin/archive/delete are still used for local
+    UI state management).
+  - Calls useConversations() and maps the API Conversation[] to the
+    shape ChatListItemWidget expects:
+      - name        ← the other participant's displayName
+      - lastMessage ← lastMessage.text
+      - timestamp   ← lastMessage.createdAt formatted as HH:MM
+      - unreadCount ← conv.unreadCount
+      - avatarUrl   ← other participant's avatarUrl
+
+  - Three new UI states:
+      isLoading → centered ActivityIndicator + "Loading chats…"
+      isError   → "Couldn't load chats" + Retry button (calls refetch())
+      empty     → "No conversations yet" + "Tap + to start chatting"
+
+  - All FAB, speed-dial, and pin-prompt modal logic is unchanged.
+
+
+────────────────────────────────────────────────────────────────────────────────
+MODIFIED FILE: src/features/home/screens/ChatDetailScreen.tsx
+────────────────────────────────────────────────────────────────────────────────
+
+This file was rewritten to add full real API + real-time integration.
+The visual design and media panel are preserved.
+
+New imports:
+  useLocalSearchParams  — reads the conversationId from the URL (/chats/:id)
+  useAuthStore          — to get currentUserId for isMe detection
+  useMessages           — loads message history
+  useSendMessage        — sends new messages
+  useMarkDelivered      — marks incoming messages as delivered
+  useMarkRead           — marks incoming messages as read
+  useConversationRealtime — presence + typing subscription
+  useSocketStore        — reads incomingMessages[] for live updates
+  queryClient           — used to update the message cache on socket events
+
+Key changes:
+
+  1. Message loading
+     useMessages(conversationId) fetches the real history.
+     An ActivityIndicator is shown while messagesLoading is true.
+
+  2. Real-time message appending
+     A useEffect watches socketStore.incomingMessages[conversationId].
+     When new messages arrive via the socket, they are merged into the
+     React Query cache via queryClient.setQueryData() and the raw events
+     are cleared from socketStore via clearIncomingMessages().
+
+  3. Auto mark delivered + read
+     A useEffect runs whenever serverMessages.length changes.
+     It finds the last message from another user and calls both
+     markDelivered.mutate() and markRead.mutate() automatically.
+
+  4. Auto-scroll
+     A FlatList ref scrolls to the bottom whenever messages update.
+
+  5. Typing indicator
+     - handleTextChange() calls startTyping() when there is text.
+     - TextInput.onBlur() calls stopTyping().
+     - A ListFooterComponent renders three bouncing dots when
+       isOtherTyping is true (detected from typingUsers in socketStore).
+
+  6. Send button
+     Calls sendMessage.mutate({ conversationId, text }) on press.
+     Disabled and shows ActivityIndicator while isPending.
+     Clears the TextInput immediately (optimistic UX).
+
+  7. Online indicator in header
+     isOtherOnline is derived from the participants[] in socketStore.
+     The AvatarWidget's isOnline prop and the subtitle text
+     ("Online" / "Offline") are driven by live presence data.
+
+  8. isMe detection
+     Messages are rendered on the right (blue bubble) if
+     item.senderId === currentUserId, otherwise on the left (white).
+
+
+================================================================================
+END OF CHANGE LOG
+================================================================================
+
+
+────────────────────────────────────────────────────────────────────────────────
+MODIFIED FILE: src/features/settings/screens/SettingsScreen.tsx
+────────────────────────────────────────────────────────────────────────────────
+
+Changes:
+  - Wired real user data from useAuthStore (avatar, name, phone) in the Profile row.
+  - Wired Logout button to call useLogout().mutateAsync() and redirect to the Welcome Screen.
+
+
+────────────────────────────────────────────────────────────────────────────────
+NEW FILE: src/features/settings/hooks/useProfile.ts
+────────────────────────────────────────────────────────────────────────────────
+
+Purpose:
+  React Query hooks for GET /me and PATCH /me.
+
+API calls:
+  - useProfile (GET /me)
+  - useUpdateProfile (PATCH /me)
+
+
+────────────────────────────────────────────────────────────────────────────────
+MODIFIED FILE: src/features/settings/screens/EditProfileScreen.tsx
+────────────────────────────────────────────────────────────────────────────────
+
+Changes:
+  - Reads current user data (name, phone, avatar) from useAuthStore.
+  - Sets name to a local state to allow editing.
+  - Disables the phone number field since the API does not allow phone update here.
+  - Wired Save button to useUpdateProfile.mutateAsync().
+
+
+────────────────────────────────────────────────────────────────────────────────
+MODIFIED FILE: src/core/lib/apiClient.ts
+────────────────────────────────────────────────────────────────────────────────
+
+Changes:
+  - Added console.log statements to log API responses (success and error cases) to the Metro bundler console to aid in debugging.
+
+
+────────────────────────────────────────────────────────────────────────────────
+MODIFIED FILE: src/features/home/screens/ChatDetailScreen.tsx
+────────────────────────────────────────────────────────────────────────────────
+
+Changes:
+  - Fixed a critical 'Maximum update depth exceeded' infinite loop in React 18 caused by a Zustand selector returning a new empty array literal `[]` on every check for the incoming socket messages.
+
+
+────────────────────────────────────────────────────────────────────────────────
+MODIFIED FILE: src/features/home/screens/NewMessageScreen.tsx
+────────────────────────────────────────────────────────────────────────────────
+
+Changes:
+  - Implemented the contact matching flow. Now reads phone numbers from device contacts and sends them to POST /v1/contacts/match to find friends who are already on ChatMe.
+  - Pressing a matched contact now successfully calls POST /v1/conversations/direct to create or get the conversation ID before navigating into the chat.
+
+
+────────────────────────────────────────────────────────────────────────────────
+NEW FILES: 
+  - src/features/home/hooks/useMatchContacts.ts (POST /v1/contacts/match)
+  - src/features/home/hooks/useCreateDirectConversation.ts (POST /v1/conversations/direct)
+────────────────────────────────────────────────────────────────────────────────
+
+
+────────────────────────────────────────────────────────────────────────────────
+MODIFIED FILE: src/features/auth/screens/VerifyScreen.tsx
+────────────────────────────────────────────────────────────────────────────────
+
+Changes:
+  - Corrected routing bug to redirect users with a complete profile (existing users) directly to the /(tabs) layout skipping the Name Setup screen entirely.
+
+
+────────────────────────────────────────────────────────────────────────────────
+MODIFIED FILE: src/features/auth/screens/NameScreen.tsx
+────────────────────────────────────────────────────────────────────────────────
+
+Changes:
+  - Replaced local storage mock with real API integration: submitting a name now correctly hits PATCH /v1/me to store the name remotely before transitioning to the upload avatar screen.
+  - Also dynamically adjusts the button label to indicate loading states and disables inputs while submitting.
+
+
+────────────────────────────────────────────────────────────────────────────────
+MODIFIED FILE: src/features/home/screens/PinSetupScreen.tsx
+────────────────────────────────────────────────────────────────────────────────
+
+Changes:
+  - The PIN setup screen now securely saves the 4-digit PIN code to the device's keychain/keystore using `expo-secure-store` under the key 'chatme_pin' before navigating back to the chats list.
+
+
+────────────────────────────────────────────────────────────────────────────────
+MODIFIED FILE: src/features/home/screens/ChatsScreen.tsx
+────────────────────────────────────────────────────────────────────────────────
+
+Changes:
+  - Added a secure lock screen overlay to the Chats list. 
+  - On mount, it checks `expo-secure-store` for a saved PIN. If one exists, the app is locked and the user must enter the exact PIN to reveal the chats.
+  - The 'Do you want to add a pin code?' modal now only appears if there is absolutely no saved PIN in secure storage (and the user hasn't explicitly skipped it before).
+
+
+────────────────────────────────────────────────────────────────────────────────
+MODIFIED FILE: src/core/lib/socketService.ts
+────────────────────────────────────────────────────────────────────────────────
+
+Changes:
+  - Added queryClient invalidation for the 'conversations' query key when a 'message.created' socket event is received. This ensures that the ChatsScreen (conversation list) automatically updates with the latest message and unread count in real-time, without requiring manual user refreshes.
+
+
+────────────────────────────────────────────────────────────────────────────────
+MODIFIED FILE: src/features/home/hooks/useConversations.ts
+────────────────────────────────────────────────────────────────────────────────
+
+Changes:
+  - Updated the `LatestMessage` interface to match the real API response format (changed `text` to `preview` and added `kind`). This fixes the TypeScript error on ChatsScreen where `latest?.preview` was being accessed.
+
+
+────────────────────────────────────────────────────────────────────────────────
+MODIFIED FILE: src/features/home/hooks/useConversationRealtime.ts
+────────────────────────────────────────────────────────────────────────────────
+
+Changes:
+  - Fixed a 'Maximum update depth exceeded' infinite render loop that occurred when opening the ChatDetailsScreen. The issue was caused by Zustand selectors falling back to inline empty arrays `[]`, which created a new array reference on every store update and triggered constant re-renders. Replaced the inline arrays with stable constant references (`EMPTY_PARTICIPANTS` and `EMPTY_TYPING`).
+
+
+────────────────────────────────────────────────────────────────────────────────
+MODIFIED FILE: src/features/home/hooks/useMessages.ts
+────────────────────────────────────────────────────────────────────────────────
+
+Changes:
+  - Updated the API response parsing to correctly look for the 'items' array instead of 'data'. The backend pagination format returns { items: [...], pageInfo: {...} } instead of { data: [...] }. This resolves the issue where the ChatDetailsScreen was showing an empty list even if messages existed.
+
+
+────────────────────────────────────────────────────────────────────────────────
+MODIFIED FILE: src/features/home/screens/ChatsScreen.tsx
+────────────────────────────────────────────────────────────────────────────────
+
+Changes:
+  - Updated the latest message preview logic to prefix the string with 'You: ' if the current logged-in user is the sender of the message. This makes the conversation list UI clearer for the user.
+
+
+────────────────────────────────────────────────────────────────────────────────
+MODIFIED FILE: src/features/home/hooks/useSendMessage.ts
+────────────────────────────────────────────────────────────────────────────────
+
+Changes:
+  - Fixed message sending failure by explicitly adding `kind: "text"` to the POST payload since the backend requires it.
+
+
+────────────────────────────────────────────────────────────────────────────────
+MODIFIED FILE: src/features/home/screens/ChatDetailScreen.tsx
+────────────────────────────────────────────────────────────────────────────────
+
+Changes:
+  - Fixed the scrolling physics and sorting of messages by making the FlatList `inverted` and reversing the data array `[...serverMessages].reverse()`. This matches standard chat apps where the newest messages anchor to the bottom of the screen.
+  - Adjusted the scrolling hook to `scrollToOffset({ offset: 0 })` instead of `scrollToEnd` to correctly scroll to the latest message.
+  - Moved the typing indicator from the ListFooterComponent to ListHeaderComponent so it always correctly appears directly below the newest message in the inverted list.
+
+
+────────────────────────────────────────────────────────────────────────────────
+MODIFIED FILE: src/features/home/hooks/useSendMessage.ts
+────────────────────────────────────────────────────────────────────────────────
+
+Changes:
+  - Fixed an issue where sent messages wouldn't appear locally by updating the optimistic cache logic. The `onSuccess` callback now correctly uses `variables.conversationId` instead of assuming the returned message object includes the `conversationId` field.
+
+
+────────────────────────────────────────────────────────────────────────────────
+MODIFIED FILE: src/features/home/screens/ChatDetailScreen.tsx
+────────────────────────────────────────────────────────────────────────────────
+
+Changes:
+  - Fixed vertical alignment of text in the chat input field by removing fixed heights and delegating layout to padding inside the TextInput.
+  - Added a debug console.log statement during `renderItem` to log `senderId` and `currentUserId` comparisons to track down any misattribution of sent vs. incoming messages.
+
+
+────────────────────────────────────────────────────────────────────────────────
+MODIFIED FILE: src/features/home/hooks/useSendMessage.ts
+────────────────────────────────────────────────────────────────────────────────
+
+Changes:
+  - Removed the `kind` property from the POST request payload because the backend was rejecting it with a 400 VALIDATION_ERROR.
+  - Changed the optimistic cache update to prepend the `newMessage` instead of appending it, since the backend API natively returns messages in a latest-first order.
+
+
+────────────────────────────────────────────────────────────────────────────────
+MODIFIED FILE: src/features/home/screens/ChatDetailScreen.tsx
+────────────────────────────────────────────────────────────────────────────────
+
+Changes:
+  - Removed the `.reverse()` operation from the FlatList data source. Since the API naturally returns the messages latest-first, passing them directly to an `inverted` FlatList correctly anchors the newest messages at the bottom nearest to the keyboard.
+  - Fixed the incoming socket cache merge logic to prepend incoming messages to index 0, keeping the latest-first order intact.
+
+
+────────────────────────────────────────────────────────────────────────────────
+MODIFIED FILE: src/features/home/screens/ChatDetailScreen.tsx
+────────────────────────────────────────────────────────────────────────────────
+
+Changes:
+  - Fixed an issue where the unread message count remained on the ChatsScreen after opening a chat. The read receipt logic was incorrectly passing the ID of the oldest incoming message instead of the newest incoming message. Updated the index from `incoming.length - 1` to `0`, ensuring the backend API successfully clears the unread boundary up to the very latest message.

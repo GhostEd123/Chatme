@@ -1,5 +1,6 @@
 import { useAuthStore } from "@/features/auth/store/authStore";
 import { useChatStore } from "@/features/home/store/chatStore";
+import { useConversations, getConversationDisplay } from "@/features/home/hooks/useConversations";
 import ThemedButton from "@/shared/components/ThemedButton";
 import ChatListItemWidget from "@/shared/widgets/ChatListItemWidget";
 import SearchInputWidget from "@/shared/widgets/SearchInputWidget";
@@ -7,6 +8,7 @@ import Feather from "@expo/vector-icons/Feather";
 import { useRouter } from "expo-router";
 import React, { useRef, useState } from "react";
 import {
+  ActivityIndicator,
   Animated,
   FlatList,
   Modal,
@@ -18,6 +20,9 @@ import {
 import { StatusBar } from "expo-status-bar";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { withUniwind } from "uniwind";
+import * as SecureStore from "expo-secure-store";
+import PinDotsWidget from "@/shared/widgets/PinDotsWidget";
+import NumpadWidget from "@/shared/widgets/NumpadWidget";
 
 const StyledFeather = withUniwind(Feather);
 
@@ -67,12 +72,63 @@ function SpeedDialItem({
 export default function ChatsScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { chats, muteChat, pinChat, deleteChat, archiveChat } = useChatStore();
+  // Legacy mock store actions (pinning, muting, archiving) still come from chatStore
+  const { muteChat, pinChat, deleteChat, archiveChat } = useChatStore();
   const { user, updateUser } = useAuthStore();
 
-  const [showPinPrompt, setShowPinPrompt] = useState(
-    user?.hasPinSetup === undefined,
-  );
+  // Real conversation data from API
+  const { data: conversations, isLoading, isError, refetch } = useConversations();
+
+  // Map API conversations to the shape ChatListItemWidget expects
+  const currentUserId = user?.id ?? "";
+  const chats = (conversations ?? []).map((conv) => {
+    const { name, avatarUrl } = getConversationDisplay(conv, currentUserId);
+    const latest = conv.latestMessage;
+    return {
+      id: conv.id,
+      name,
+      lastMessage: latest
+        ? (latest.senderId === currentUserId ? `You: ${latest.preview}` : latest.preview)
+        : "",
+      timestamp: latest?.createdAt
+        ? new Date(latest.createdAt).toLocaleTimeString([], {
+            hour: "2-digit",
+            minute: "2-digit",
+          })
+        : "",
+      unreadCount: conv.unreadCount,
+      avatarUrl: avatarUrl ?? undefined,
+      // Use real settings from API
+      isPinned: conv.settings?.pinned ?? false,
+      isMuted: conv.settings?.muted ?? false,
+      isArchived: conv.settings?.archived ?? false,
+    };
+  });
+
+  const [appLockedState, setAppLockedState] = useState<"checking" | "locked" | "unlocked">("checking");
+  const [savedPin, setSavedPin] = useState<string | null>(null);
+  const [unlockPinInput, setUnlockPinInput] = useState("");
+  const [unlockError, setUnlockError] = useState(false);
+  const [showPinPrompt, setShowPinPrompt] = useState(false);
+
+  React.useEffect(() => {
+    (async () => {
+      try {
+        const pin = await SecureStore.getItemAsync("chatme_pin");
+        if (pin) {
+          setSavedPin(pin);
+          setAppLockedState("locked");
+        } else {
+          setAppLockedState("unlocked");
+          if (user?.hasPinSetup === undefined) {
+            setShowPinPrompt(true);
+          }
+        }
+      } catch (err) {
+        setAppLockedState("unlocked");
+      }
+    })();
+  }, [user?.hasPinSetup]);
   const [fabOpen, setFabOpen] = useState(false);
 
   // Three independent animation values for staggered reveal
@@ -176,6 +232,57 @@ export default function ChatsScreen() {
     outputRange: ["0deg", "45deg"],
   });
 
+  const handleUnlockNumpadPress = (val: string) => {
+    if (unlockPinInput.length < 4) {
+      setUnlockError(false);
+      const newPin = unlockPinInput + val;
+      setUnlockPinInput(newPin);
+      if (newPin.length === 4) {
+        if (newPin === savedPin) {
+          setAppLockedState("unlocked");
+          setUnlockPinInput("");
+        } else {
+          setUnlockError(true);
+          setTimeout(() => setUnlockPinInput(""), 400);
+        }
+      }
+    }
+  };
+
+  const handleUnlockBackspace = () => {
+    setUnlockPinInput((prev) => prev.slice(0, -1));
+    setUnlockError(false);
+  };
+
+  if (appLockedState === "checking") {
+    return (
+      <View className="flex-1 bg-background items-center justify-center">
+        <ActivityIndicator size="large" color="#57b77d" />
+      </View>
+    );
+  }
+
+  if (appLockedState === "locked") {
+    return (
+      <View className="flex-1 bg-background" style={{ paddingTop: insets.top }}>
+        <StatusBar style="dark" />
+        <View className="px-6 pt-16 flex-1 items-center">
+          <View className="bg-primary/10 size-16 rounded-3xl items-center justify-center mb-6">
+            <StyledFeather name="lock" size={28} colorClassName="accent-primary-400" />
+          </View>
+          <Text className="text-h3 font-display-bold text-neutral-900 dark:text-white mb-2 text-center">
+            Enter your pin
+          </Text>
+          <Text className="text-body-md font-display-medium text-neutral-500 text-center mb-10">
+            {unlockError ? "Incorrect pin. Try again." : "Unlock ChatMe to view your messages."}
+          </Text>
+          <PinDotsWidget length={4} value={unlockPinInput} />
+        </View>
+        <NumpadWidget onPress={handleUnlockNumpadPress} onBackspace={handleUnlockBackspace} />
+      </View>
+    );
+  }
+
   return (
     <View className="flex-1 bg-background">
       <StatusBar style="light" />
@@ -189,21 +296,44 @@ export default function ChatsScreen() {
       </View>
 
       {/* Chat List */}
-      <FlatList
-        data={chats}
-        keyExtractor={(item) => item.id}
-        contentContainerClassName="px-4 pt-4 pb-32"
-        renderItem={({ item }) => (
-          <ChatListItemWidget
-            chat={item}
-            onPress={() => router.push(`/chats/${item.id}`)}
-            onMute={() => muteChat(item.id, !item.isMuted)}
-            onPin={() => pinChat(item.id, !item.isPinned)}
-            onDelete={() => deleteChat(item.id)}
-            onArchive={() => archiveChat(item.id, !item.isArchived)}
-          />
-        )}
-      />
+      {isLoading ? (
+        <View className="flex-1 items-center justify-center">
+          <ActivityIndicator size="large" color="#57b77d" />
+          <Text className="mt-3 text-body-md text-muted font-display-medium">Loading chats…</Text>
+        </View>
+      ) : isError ? (
+        <View className="flex-1 items-center justify-center px-8">
+          <Feather name="wifi-off" size={40} color="#6e8597" />
+          <Text className="mt-3 text-body-lg font-display-bold text-foreground text-center">Couldn't load chats</Text>
+          <Text className="mt-1 text-body-md text-muted text-center mb-5">Check your connection and try again.</Text>
+          <TouchableOpacity onPress={() => refetch()} className="bg-primary-400 px-6 py-3 rounded-2xl">
+            <Text className="text-white font-display-bold text-body-md">Retry</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <FlatList
+          data={chats}
+          keyExtractor={(item) => item.id}
+          contentContainerClassName="px-4 pt-4 pb-32"
+          renderItem={({ item }) => (
+            <ChatListItemWidget
+              chat={item}
+              onPress={() => router.push(`/chats/${item.id}`)}
+              onMute={() => muteChat(item.id, !item.isMuted)}
+              onPin={() => pinChat(item.id, !item.isPinned)}
+              onDelete={() => deleteChat(item.id)}
+              onArchive={() => archiveChat(item.id, !item.isArchived)}
+            />
+          )}
+          ListEmptyComponent={() => (
+            <View className="items-center justify-center py-24">
+              <Feather name="message-circle" size={48} color="#6e8597" />
+              <Text className="mt-4 text-body-lg font-display-bold text-foreground">No conversations yet</Text>
+              <Text className="mt-1 text-body-md text-muted">Tap + to start chatting</Text>
+            </View>
+          )}
+        />
+      )}
 
       {/* ── FAB backdrop ── */}
       {fabOpen && (

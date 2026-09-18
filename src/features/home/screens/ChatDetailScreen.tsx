@@ -1,4 +1,12 @@
 import AvatarWidget from "@/shared/widgets/AvatarWidget";
+import { useAuthStore } from "@/features/auth/store/authStore";
+import { useConversation } from "@/features/home/hooks/useConversation";
+import { useMessages } from "@/features/home/hooks/useMessages";
+import { useSendMessage } from "@/features/home/hooks/useSendMessage";
+import { useMarkDelivered, useMarkRead } from "@/features/home/hooks/useReceipts";
+import { useConversationRealtime } from "@/features/home/hooks/useConversationRealtime";
+import { useSocketStore } from "@/core/store/socketStore";
+import { queryClient } from "@/core/lib/queryClient";
 import Feather from "@expo/vector-icons/Feather";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
@@ -9,7 +17,7 @@ import {
   Query,
   requestPermissionsAsync as requestMediaPermissionsAsync,
 } from "expo-media-library";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import React, { useEffect, useRef, useState } from "react";
 import {
   Alert,
@@ -22,40 +30,13 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+  ActivityIndicator,
 } from "react-native";
 import { KeyboardStickyView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { withUniwind } from "uniwind";
 
 const StyledFeather = withUniwind(Feather);
-
-// ── Mock messages ─────────────────────────────────────────────────────────────
-const MOCK_MESSAGES = [
-  {
-    id: "1",
-    text: "Habitant elit pellentesque curabitur morbi sit fusce elit",
-    isMe: false,
-    time: "18:25",
-  },
-  {
-    id: "2",
-    text: "Gravida lectus semper orci",
-    isMe: true,
-    time: "19:40",
-  },
-  {
-    id: "3",
-    text: "Egestas interdum orci commodo faucibus pretium, neque etiam",
-    isMe: false,
-    time: "19:40",
-  },
-  {
-    id: "4",
-    text: "Orci maecenas hendrerit mattis consectetur. Mauris.",
-    isMe: false,
-    time: "19:40",
-  },
-];
 
 // ── Menu action type ──────────────────────────────────────────────────────────
 interface MediaMenuAction {
@@ -68,6 +49,10 @@ interface MediaMenuAction {
 export default function ChatDetailScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { id: conversationId } = useLocalSearchParams<{ id: string }>();
+
+  const { user } = useAuthStore();
+  const currentUserId = user?.id ?? "";
 
   const [message, setMessage] = useState("");
   const [showMediaPanel, setShowMediaPanel] = useState(false);
@@ -75,6 +60,84 @@ export default function ChatDetailScreen() {
     { id: string; uri: string }[]
   >([]);
   const [mediaPermission, setMediaPermission] = useState(false);
+  const listRef = useRef<FlatList>(null);
+
+  // ── API hooks ──
+  const {
+    data: serverMessages = [],
+    isLoading: messagesLoading,
+  } = useMessages(conversationId ?? "");
+
+  const sendMessage = useSendMessage();
+  const markDelivered = useMarkDelivered();
+  const markRead = useMarkRead();
+
+  // ── Conversation metadata (name, avatar) ──
+  const { data: conversation } = useConversation(conversationId);
+  const otherParticipantMeta =
+    conversation?.type === "direct" ? conversation.otherParticipant : null;
+  const conversationName =
+    conversation?.type === "direct"
+      ? conversation.otherParticipant.displayName
+      : conversation?.type === "group"
+      ? conversation.name
+      : "Chat";
+
+  // ── Real-time ──
+  const { typingUsers, participants, startTyping, stopTyping } = useConversationRealtime(conversationId);
+
+  // Incoming socket messages — merge into cache
+  const incomingMessages = useSocketStore((s) =>
+    conversationId ? s.incomingMessages[conversationId] : undefined
+  );
+  const clearIncoming = useSocketStore((s) => s.clearIncomingMessages);
+
+  useEffect(() => {
+    if (!incomingMessages || incomingMessages.length === 0) return;
+    // Append socket events to the React Query cache
+    queryClient.setQueryData<typeof serverMessages>(
+      ["messages", conversationId],
+      (old) => {
+        const existing = old ?? [];
+        const existingIds = new Set(existing.map((m) => m.id));
+        const novel = incomingMessages.filter((m) => !existingIds.has(m.id));
+        if (novel.length === 0) return old;
+        const novelMapped = novel.map((m) => ({
+          id: m.id,
+          conversationId: m.conversationId,
+          clientMessageId: m.clientMessageId,
+          senderId: m.senderId,
+          kind: m.kind as "text",
+          text: m.text,
+          createdAt: m.createdAt,
+        })).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        return [...novelMapped, ...existing];
+      }
+    );
+    clearIncoming(conversationId!);
+  }, [incomingMessages, conversationId, clearIncoming]);
+
+  // Auto-mark delivered and read when new messages arrive from others
+  useEffect(() => {
+    const incoming = serverMessages.filter((m) => m.senderId !== currentUserId);
+    if (incoming.length === 0) return;
+    const lastId = incoming[0].id;
+    if (conversationId) {
+      markDelivered.mutate({ conversationId, throughMessageId: lastId });
+      markRead.mutate({ conversationId, throughMessageId: lastId });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverMessages.length]);
+
+  // Scroll to latest message when messages update
+  useEffect(() => {
+    if (serverMessages.length > 0) {
+      setTimeout(
+        () => listRef.current?.scrollToOffset({ offset: 0, animated: true }),
+        100
+      );
+    }
+  }, [serverMessages.length]);
 
   const panelAnim = useRef(new Animated.Value(0)).current;
 
@@ -89,14 +152,11 @@ export default function ChatDetailScreen() {
             .limit(10)
             .eq(AssetField.MEDIA_TYPE, MediaType.IMAGE)
             .exe();
-      
           const withUris = await Promise.all(
-            assets.map(async (a) => ({ id: a.id, uri: await a.getUri() })),
+            assets.map(async (a) => ({ id: a.id, uri: await a.getUri() }))
           );
           setRecentPhotos(withUris);
-        } catch {
- 
-        }
+        } catch {}
       }
     })();
   }, []);
@@ -125,6 +185,24 @@ export default function ChatDetailScreen() {
       closePanel();
     } else {
       openPanel();
+    }
+  };
+
+  // ── Send ──
+  const handleSend = () => {
+    if (!message.trim() || !conversationId) return;
+    const text = message.trim();
+    setMessage("");
+    sendMessage.mutate({ conversationId, text });
+  };
+
+  // ── Typing (from realtime hook above) ──
+  const handleTextChange = (text: string) => {
+    setMessage(text);
+    if (text.trim()) {
+      startTyping();
+    } else {
+      stopTyping();
     }
   };
 
@@ -179,6 +257,12 @@ export default function ChatDetailScreen() {
     outputRange: [220, 0],
   });
 
+  // ── Conversation header info from participants ──
+  const otherParticipant = participants.find((p) => p.userId !== currentUserId);
+  const isOtherOnline = otherParticipant?.status === "online";
+  const typingOthers = typingUsers.filter((t) => t.userId !== currentUserId);
+  const isOtherTyping = typingOthers.length > 0;
+
   return (
     <View className="flex-1 bg-background">
       {/* ── Header ── */}
@@ -189,12 +273,22 @@ export default function ChatDetailScreen() {
         <TouchableOpacity onPress={() => router.back()} className="mr-3">
           <Feather name="chevron-left" size={24} color="#fff" />
         </TouchableOpacity>
-        <AvatarWidget url="https://i.pravatar.cc/150?u=12" size={40} isOnline />
+        <AvatarWidget
+          url={otherParticipantMeta?.avatarUrl ?? undefined}
+          size={40}
+          isOnline={isOtherOnline}
+        />
         <View className="ml-3 flex-1">
           <Text className="text-body-lg font-display-bold text-white">
-            Keanu Murphy
+            {conversationName}
           </Text>
-          <Text className="text-body-sm text-white/80">Active 5 minutes ago</Text>
+          <Text className="text-body-sm text-white/80">
+            {isOtherTyping
+              ? "typing…"
+              : isOtherOnline
+              ? "Online"
+              : "Offline"}
+          </Text>
         </View>
         <TouchableOpacity className="mr-5">
           <Feather name="video" size={20} color="#fff" />
@@ -205,42 +299,70 @@ export default function ChatDetailScreen() {
       </View>
 
       {/* ── Messages ── */}
-      <FlatList
-        data={MOCK_MESSAGES}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={{ padding: 16, paddingBottom: 8 }}
-        renderItem={({ item }) => (
-          <View
-            className={`mb-4 max-w-[78%] ${item.isMe ? "self-end" : "self-start"}`}
-          >
-            <View
-              className={`px-4 py-3 rounded-2xl ${
-                item.isMe
-                  ? "bg-primary-400 rounded-tr-sm"
-                  : "bg-surface border border-border/50 rounded-tl-sm"
-              }`}
-            >
-              <Text
-                className={`text-body-md font-display-medium ${
-                  item.isMe ? "text-white" : "text-foreground"
-                }`}
+      {messagesLoading ? (
+        <View className="flex-1 items-center justify-center">
+          <ActivityIndicator size="large" color="#57b77d" />
+        </View>
+      ) : (
+        <FlatList
+          ref={listRef}
+          data={serverMessages}
+          inverted
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={{ padding: 16, paddingTop: 8 }}
+          renderItem={({ item }) => {
+            const isMe = item.senderId === currentUserId;
+            // Added log as requested
+            console.log("ChatDetailScreen Render Message:", { senderId: item.senderId, currentUserId, isMe, text: item.text });
+            const time = new Date(item.createdAt).toLocaleTimeString([], {
+              hour: "2-digit",
+              minute: "2-digit",
+            });
+            return (
+              <View
+                className={`mb-4 max-w-[78%] ${isMe ? "self-end" : "self-start"}`}
               >
-                {item.text}
-              </Text>
-            </View>
-            <View
-              className={`flex-row items-center mt-1 gap-1 ${
-                item.isMe ? "justify-end" : "justify-start"
-              }`}
-            >
-              <Text className="text-body-xs text-muted">{item.time}</Text>
-              {item.isMe && (
-                <Feather name="check-circle" size={11} color="#57b77d" />
-              )}
-            </View>
-          </View>
-        )}
-      />
+                <View
+                  className={`px-4 py-3 rounded-2xl ${
+                    isMe
+                      ? "bg-primary-400 rounded-tr-sm"
+                      : "bg-surface border border-border/50 rounded-tl-sm"
+                  }`}
+                >
+                  <Text
+                    className={`text-body-md font-display-medium ${
+                      isMe ? "text-white" : "text-foreground"
+                    }`}
+                  >
+                    {item.text}
+                  </Text>
+                </View>
+                <View
+                  className={`flex-row items-center mt-1 gap-1 ${
+                    isMe ? "justify-end" : "justify-start"
+                  }`}
+                >
+                  <Text className="text-body-xs text-muted">{time}</Text>
+                  {isMe && (
+                    <Feather name="check-circle" size={11} color="#57b77d" />
+                  )}
+                </View>
+              </View>
+            );
+          }}
+          ListHeaderComponent={
+            isOtherTyping ? (
+              <View className="self-start bg-surface border border-border/50 rounded-2xl rounded-tl-sm px-4 py-3 mb-4 mt-2">
+                <View className="flex-row gap-1 items-center">
+                  <View className="w-2 h-2 rounded-full bg-muted animate-bounce" />
+                  <View className="w-2 h-2 rounded-full bg-muted animate-bounce" style={{ animationDelay: "150ms" }} />
+                  <View className="w-2 h-2 rounded-full bg-muted animate-bounce" style={{ animationDelay: "300ms" }} />
+                </View>
+              </View>
+            ) : null
+          }
+        />
+      )}
 
       {/* ── Input bar + media panel ── */}
       <KeyboardStickyView offset={{ closed: 0, opened: 0 }}>
@@ -324,38 +446,52 @@ export default function ChatDetailScreen() {
 
         {/* Text input bar */}
         <View
-          className="px-4 py-3 bg-surface border-t border-border/50 flex-row items-center"
+          className="px-4 py-3 bg-surface border-t border-border/50 flex-row items-end"
           style={{ paddingBottom: insets.bottom + 12 }}
         >
-          <TouchableOpacity onPress={togglePanel} className="mr-3">
+          <TouchableOpacity onPress={togglePanel} className="mr-3 mb-2">
             <Feather
               name={showMediaPanel ? "x-circle" : "paperclip"}
               size={22}
               color={showMediaPanel ? "#57b77d" : "#6e8597"}
             />
           </TouchableOpacity>
-          <View className="flex-1 flex-row items-center bg-background rounded-full px-4 py-2 border border-border">
+          <View className="flex-1 flex-row items-end bg-background rounded-3xl px-4 min-h-[40px] border border-border">
             <TextInput
               className="flex-1 text-body-md text-foreground"
               placeholder="Type a message..."
               placeholderTextColor="#9ca3af"
               value={message}
-              onChangeText={setMessage}
+              onChangeText={handleTextChange}
+              onBlur={stopTyping}
               multiline
+              style={{
+                paddingTop: Platform.OS === "ios" ? 10 : 8,
+                paddingBottom: Platform.OS === "ios" ? 10 : 8,
+                maxHeight: 120,
+              }}
               onFocus={() => {
                 if (showMediaPanel) closePanel();
               }}
             />
-            <TouchableOpacity className="ml-2">
+            <TouchableOpacity className="ml-2 mb-2">
               <Feather name="smile" size={20} color="#6e8597" />
             </TouchableOpacity>
           </View>
-          <TouchableOpacity className="ml-3 w-10 h-10 bg-primary-400 rounded-full items-center justify-center">
-            <Feather
-              name={message.trim() ? "send" : "mic"}
-              size={18}
-              color="#fff"
-            />
+          <TouchableOpacity
+            onPress={handleSend}
+            disabled={sendMessage.isPending}
+            className="ml-3 mb-1 w-10 h-10 bg-primary-400 rounded-full items-center justify-center"
+          >
+            {sendMessage.isPending ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <Feather
+                name={message.trim() ? "send" : "mic"}
+                size={18}
+                color="#fff"
+              />
+            )}
           </TouchableOpacity>
         </View>
       </KeyboardStickyView>

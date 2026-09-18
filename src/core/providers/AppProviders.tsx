@@ -1,5 +1,6 @@
 import { clientStoragePersister } from "@/core/lib/persister";
 import { queryClient } from "@/core/lib/queryClient";
+import SocketProvider from "@/core/providers/SocketProvider";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import { ReactNode } from "react";
 import { KeyboardProvider } from "react-native-keyboard-controller";
@@ -25,7 +26,9 @@ const AppProviders = ({ children }: { children: ReactNode }) => {
         <SafeAreaListener
           onChange={({ insets }) => Uniwind.updateInsets(insets)}
         >
-          <KeyboardProvider>{children}</KeyboardProvider>
+          <KeyboardProvider>
+            <SocketProvider>{children}</SocketProvider>
+          </KeyboardProvider>
         </SafeAreaListener>
       </SafeAreaProvider>
     </PersistQueryClientProvider>

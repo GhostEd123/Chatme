@@ -18,7 +18,7 @@ type AuthTemplateProps = {
   goBack?: boolean;
   onBack?: () => void;
   children?: ReactNode;
-  buttonProps?: Omit<ComponentProps<typeof OThemedButton>, "label">;
+  buttonProps?: Omit<ComponentProps<typeof OThemedButton>, "label"> & { label?: string };
   bottomWidget?: ReactNode;
 };
 
@@ -42,7 +42,7 @@ const AuthTemplate = ({
           entering={FadeInDown.duration(600).delay(200).springify()} 
           className="px-safe-offset-6 pb-4"
         >
-          <ThemedButton label="Next" variant="primary" {...buttonProps} />
+          <ThemedButton label={buttonProps?.label ?? "Next"} variant="primary" {...buttonProps} />
         </Animated.View>
       }
     >

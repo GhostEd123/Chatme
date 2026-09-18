@@ -1,3 +1,4 @@
+import * as SecureStore from "expo-secure-store";
 import Feather from "@expo/vector-icons/Feather";
 import { useRouter } from "expo-router";
 import React, { useState } from "react";
@@ -16,12 +17,13 @@ export default function PinSetupScreen() {
   const { updateUser } = useAuthStore();
   const [pin, setPin] = useState("");
 
-  const handleNumpadPress = (val: string) => {
+  const handleNumpadPress = async (val: string) => {
     if (pin.length < 4) {
       const newPin = pin + val;
       setPin(newPin);
       if (newPin.length === 4) {
-        // Save pin state and navigate
+        // Save pin securely and navigate
+        await SecureStore.setItemAsync("chatme_pin", newPin);
         updateUser({ hasPinSetup: true });
         router.replace("/(tabs)/chats");
       }
