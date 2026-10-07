@@ -101,3 +101,15 @@ export function useConversations() {
     staleTime: 30_000,
   });
 }
+
+export function useArchivedConversations() {
+  return useQuery<Conversation[]>({
+    queryKey: ["archivedConversations"],
+    queryFn: async () => {
+      const res = await apiRequest<ConversationsResponse>("/conversations/archived");
+      return res?.items ?? [];
+    },
+    staleTime: 30_000,
+  });
+}
+

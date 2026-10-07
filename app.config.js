@@ -117,6 +117,17 @@ module.exports = {
       },
     ],
     "expo-document-picker",
+    [
+      "@howincodes/expo-dynamic-app-icon",
+      {
+        icons: {
+          green: "./assets/green_icon.png",
+          blue: "./assets/blue_icon.png",
+          red: "./assets/red_icon.png",
+          orange: "./assets/orange_icon.png",
+        },
+      },
+    ],
   ],
   experiments: {
     typedRoutes: true,

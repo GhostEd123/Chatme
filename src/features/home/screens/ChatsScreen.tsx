@@ -1,6 +1,7 @@
 import { useAuthStore } from "@/features/auth/store/authStore";
 import { useChatStore } from "@/features/home/store/chatStore";
-import { useConversations, getConversationDisplay } from "@/features/home/hooks/useConversations";
+import { usePinConversation, useArchiveConversation, useMuteConversation } from "@/features/home/hooks/useConversationSettings";
+import { useConversations, useArchivedConversations, getConversationDisplay } from "@/features/home/hooks/useConversations";
 import ThemedButton from "@/shared/components/ThemedButton";
 import ChatListItemWidget from "@/shared/widgets/ChatListItemWidget";
 import SearchInputWidget from "@/shared/widgets/SearchInputWidget";
@@ -23,6 +24,7 @@ import { withUniwind } from "uniwind";
 import * as SecureStore from "expo-secure-store";
 import PinDotsWidget from "@/shared/widgets/PinDotsWidget";
 import NumpadWidget from "@/shared/widgets/NumpadWidget";
+import { useThemeStore, THEME_PALETTE } from "@/core/store/themeStore";
 
 const StyledFeather = withUniwind(Feather);
 
@@ -72,16 +74,23 @@ function SpeedDialItem({
 export default function ChatsScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  // Legacy mock store actions (pinning, muting, archiving) still come from chatStore
-  const { muteChat, pinChat, deleteChat, archiveChat } = useChatStore();
+  // Legacy mock store action for delete (still comes from chatStore)
+  const { deleteChat } = useChatStore();
+  const { mutate: pinChat } = usePinConversation();
+  const { mutate: archiveChat } = useArchiveConversation();
+  const { mutate: muteChat } = useMuteConversation();
   const { user, updateUser } = useAuthStore();
+
+  // Theme colour
+  const activeTheme = useThemeStore((s) => s.theme);
+  const primaryColor = THEME_PALETTE[activeTheme].primary;
 
   // Real conversation data from API
   const { data: conversations, isLoading, isError, refetch } = useConversations();
 
   // Map API conversations to the shape ChatListItemWidget expects
   const currentUserId = user?.id ?? "";
-  const chats = (conversations ?? []).map((conv) => {
+  const allChats = (conversations ?? []).map((conv) => {
     const { name, avatarUrl } = getConversationDisplay(conv, currentUserId);
     const latest = conv.latestMessage;
     return {
@@ -104,6 +113,15 @@ export default function ChatsScreen() {
       isArchived: conv.settings?.archived ?? false,
     };
   });
+
+  const { data: archivedConversationsData } = useArchivedConversations();
+  
+  const archivedChats = (archivedConversationsData ?? []).map((conv) => {
+    const { name } = getConversationDisplay(conv, currentUserId);
+    return { name };
+  });
+
+  const chats = allChats.filter((c) => !c.isArchived);
 
   const [appLockedState, setAppLockedState] = useState<"checking" | "locked" | "unlocked">("checking");
   const [savedPin, setSavedPin] = useState<string | null>(null);
@@ -288,8 +306,7 @@ export default function ChatsScreen() {
       <StatusBar style="light" />
       {/* Header */}
       <View
-        className="px-5 pb-6 bg-primary-400 dark:bg-surface"
-        style={{ paddingTop: insets.top + 16 }}
+        style={{ backgroundColor: primaryColor, paddingTop: insets.top + 16, paddingBottom: 24, paddingHorizontal: 20 }}
       >
         <Text className="text-h2 font-display-bold text-white mb-4">Chats</Text>
         <SearchInputWidget />
@@ -298,7 +315,7 @@ export default function ChatsScreen() {
       {/* Chat List */}
       {isLoading ? (
         <View className="flex-1 items-center justify-center">
-          <ActivityIndicator size="large" color="#57b77d" />
+          <ActivityIndicator size="large" color={primaryColor} />
           <Text className="mt-3 text-body-md text-muted font-display-medium">Loading chats…</Text>
         </View>
       ) : isError ? (
@@ -306,7 +323,11 @@ export default function ChatsScreen() {
           <Feather name="wifi-off" size={40} color="#6e8597" />
           <Text className="mt-3 text-body-lg font-display-bold text-foreground text-center">Couldn't load chats</Text>
           <Text className="mt-1 text-body-md text-muted text-center mb-5">Check your connection and try again.</Text>
-          <TouchableOpacity onPress={() => refetch()} className="bg-primary-400 px-6 py-3 rounded-2xl">
+          <TouchableOpacity
+            onPress={() => refetch()}
+            style={{ backgroundColor: primaryColor }}
+            className="px-6 py-3 rounded-2xl"
+          >
             <Text className="text-white font-display-bold text-body-md">Retry</Text>
           </TouchableOpacity>
         </View>
@@ -314,15 +335,43 @@ export default function ChatsScreen() {
         <FlatList
           data={chats}
           keyExtractor={(item) => item.id}
-          contentContainerClassName="px-4 pt-4 pb-32"
+          contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 16, paddingBottom: 128 }}
+          ListHeaderComponent={() => (
+            <TouchableOpacity
+              onPress={() => router.push("/chats/archived")}
+              className="flex-row items-center px-4 py-3 bg-white dark:bg-neutral-900 rounded-xl mb-1"
+              activeOpacity={0.8}
+            >
+              {/* Archive icon box */}
+              <View
+                style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: primaryColor, alignItems: "center", justifyContent: "center" }}
+              >
+                <Feather name="archive" size={22} color="#fff" />
+              </View>
+              <View className="flex-1 ml-3">
+                <Text className="text-body-lg font-display-bold text-neutral-900 dark:text-white">Archived Chat</Text>
+                <Text className="text-body-sm font-display-regular text-neutral-500" numberOfLines={1}>
+                  {archivedChats.length > 0 
+                    ? archivedChats.map((c) => c.name).join(", ") 
+                    : "No archived chats"}
+                </Text>
+              </View>
+              {/* Count badge */}
+              {archivedChats.length > 0 && (
+                <View style={{ backgroundColor: primaryColor }} className="rounded-full min-w-5 h-5 items-center justify-center px-1">
+                  <Text className="text-white text-[10px] font-display-bold">{archivedChats.length}</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          )}
           renderItem={({ item }) => (
             <ChatListItemWidget
               chat={item}
               onPress={() => router.push(`/chats/${item.id}`)}
-              onMute={() => muteChat(item.id, !item.isMuted)}
-              onPin={() => pinChat(item.id, !item.isPinned)}
+              onMute={() => muteChat({ id: item.id, mute: !item.isMuted })}
+              onPin={() => pinChat({ id: item.id, pin: !item.isPinned })}
               onDelete={() => deleteChat(item.id)}
-              onArchive={() => archiveChat(item.id, !item.isArchived)}
+              onArchive={() => archiveChat({ id: item.id, archive: !item.isArchived })}
             />
           )}
           ListEmptyComponent={() => (
@@ -398,7 +447,7 @@ export default function ChatsScreen() {
           width: 56,
           height: 56,
           borderRadius: 28,
-          backgroundColor: "#57b77d",
+          backgroundColor: primaryColor,
           alignItems: "center",
           justifyContent: "center",
           shadowColor: "#000",

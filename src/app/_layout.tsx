@@ -49,6 +49,7 @@ export default function RootLayout() {
           <Stack.Screen name="index" options={{ headerShown: false }} />
           <Stack.Screen name="(auth)" options={{ headerShown: false }} />
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+          <Stack.Screen name="chats/archived" options={{ headerShown: false }} />
           {/* Sub-screens rendered outside (tabs) so the tab bar never shows */}
           <Stack.Screen name="chats/[id]" options={{ headerShown: false }} />
           <Stack.Screen name="chats/new" options={{ headerShown: false }} />

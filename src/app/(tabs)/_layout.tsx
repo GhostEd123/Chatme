@@ -9,6 +9,7 @@ import { ColorValue, Text, ViewStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { SvgProps } from "react-native-svg";
 import { useCSSVariable } from "uniwind";
+import { useThemeStore, THEME_PALETTE } from "@/core/store/themeStore";
 
 function renderIcon(Icon: React.FC<SvgProps>, focused: boolean) {
   return (
@@ -23,13 +24,15 @@ function renderIcon(Icon: React.FC<SvgProps>, focused: boolean) {
 
 export default function TabsLayout() {
   const insets = useSafeAreaInsets();
-  const [surface, neutral300, primary400, fontMd, fontBold] = useCSSVariable([
+  const [surface, neutral300, fontMd, fontBold] = useCSSVariable([
     "--color-surface",
     "--color-neutral-300",
-    "--color-primary-400",
     "--font-display-medium",
     "--font-display-bold",
   ]);
+
+  const activeTheme = useThemeStore((s) => s.theme);
+  const primaryColor = THEME_PALETTE[activeTheme].primary;
 
   return (
     <Tabs
@@ -39,7 +42,7 @@ export default function TabsLayout() {
           backgroundColor: surface as string,
           paddingBottom: insets.bottom + 10,
         },
-        tabBarActiveTintColor: primary400 as ColorValue,
+        tabBarActiveTintColor: primaryColor as ColorValue,
         tabBarInactiveTintColor: neutral300 as ColorValue,
         tabBarBackground: () => null,
       }}
