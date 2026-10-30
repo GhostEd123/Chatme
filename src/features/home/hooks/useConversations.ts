@@ -1,4 +1,5 @@
 import { apiRequest } from "@/core/lib/apiClient";
+import { useAuthStore } from "@/features/auth/store/authStore";
 import { useQuery } from "@tanstack/react-query";
 
 // ── Real API shapes ────────────────────────────────────────────────────────────
@@ -91,8 +92,9 @@ export function getConversationDisplay(
 // ── Hook ───────────────────────────────────────────────────────────────────────
 
 export function useConversations() {
+  const userId = useAuthStore((s) => s.user?.id ?? "");
   return useQuery<Conversation[]>({
-    queryKey: ["conversations"],
+    queryKey: ["conversations", userId],
     queryFn: async () => {
       const res = await apiRequest<ConversationsResponse>("/conversations");
       // API returns { items: [], pageInfo: {} }
@@ -103,8 +105,9 @@ export function useConversations() {
 }
 
 export function useArchivedConversations() {
+  const userId = useAuthStore((s) => s.user?.id ?? "");
   return useQuery<Conversation[]>({
-    queryKey: ["archivedConversations"],
+    queryKey: ["archivedConversations", userId],
     queryFn: async () => {
       const res = await apiRequest<ConversationsResponse>("/conversations/archived");
       return res?.items ?? [];

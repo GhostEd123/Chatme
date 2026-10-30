@@ -2,11 +2,11 @@ import AvatarWidget from "@/shared/widgets/AvatarWidget";
 import { useAuthStore } from "@/features/auth/store/authStore";
 import { useConversation } from "@/features/home/hooks/useConversation";
 import { useMessages } from "@/features/home/hooks/useMessages";
-import { useSendMessage } from "@/features/home/hooks/useSendMessage";
+import { useSendMessage, createSendPayload } from "@/features/home/hooks/useSendMessage";
 import { useMarkDelivered, useMarkRead } from "@/features/home/hooks/useReceipts";
 import { useConversationRealtime } from "@/features/home/hooks/useConversationRealtime";
 import { useSocketStore } from "@/core/store/socketStore";
-import { queryClient } from "@/core/lib/queryClient";
+import { upsertMessageInCache } from "@/features/home/utils/messageReconcile";
 import Feather from "@expo/vector-icons/Feather";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
@@ -64,8 +64,11 @@ export default function ChatDetailScreen() {
 
   // ── API hooks ──
   const {
-    data: serverMessages = [],
+    messages,
     isLoading: messagesLoading,
+    hasNextPage,
+    fetchNextPage,
+    isFetchingNextPage,
   } = useMessages(conversationId ?? "");
 
   const sendMessage = useSendMessage();
@@ -94,75 +97,64 @@ export default function ChatDetailScreen() {
 
   useEffect(() => {
     if (!incomingMessages || incomingMessages.length === 0) return;
-    // Append socket events to the React Query cache
-    queryClient.setQueryData<typeof serverMessages>(
-      ["messages", conversationId],
-      (old) => {
-        const existing = old ?? [];
-        const existingIds = new Set(existing.map((m) => m.id));
-        const novel = incomingMessages.filter((m) => !existingIds.has(m.id));
-        if (novel.length === 0) return old;
-        const novelMapped = novel.map((m) => ({
-          id: m.id,
-          conversationId: m.conversationId,
-          clientMessageId: m.clientMessageId,
-          senderId: m.senderId,
-          kind: m.kind as "text",
-          text: m.text,
-          createdAt: m.createdAt,
-        })).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-        return [...novelMapped, ...existing];
-      }
-    );
+    incomingMessages.forEach((m) => {
+      upsertMessageInCache(conversationId!, {
+        id: m.id,
+        conversationId: m.conversationId,
+        clientMessageId: m.clientMessageId,
+        senderId: m.senderId,
+        kind: (m.kind as any) || "text",
+        text: m.text ?? null,
+        createdAt: m.createdAt,
+        status: "delivered",
+      });
+    });
     clearIncoming(conversationId!);
   }, [incomingMessages, conversationId, clearIncoming]);
 
   // Auto-mark delivered and read when new messages arrive from others
   useEffect(() => {
-    const incoming = serverMessages.filter((m) => m.senderId !== currentUserId);
-    if (incoming.length === 0) return;
+    const incoming = messages.filter((m) => m.senderId !== currentUserId && !!conversationId);
+    if (incoming.length === 0 || !conversationId) return;
     const lastId = incoming[0].id;
-    if (conversationId) {
-      markDelivered.mutate({ conversationId, throughMessageId: lastId });
-      markRead.mutate({ conversationId, throughMessageId: lastId });
-    }
+    markDelivered.mutate({ conversationId, throughMessageId: lastId });
+    markRead.mutate({ conversationId, throughMessageId: lastId });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serverMessages.length]);
+  }, [messages.length, conversationId]);
 
   // Scroll to latest message when messages update
   useEffect(() => {
-    if (serverMessages.length > 0) {
+    if (messages.length > 0) {
       setTimeout(
         () => listRef.current?.scrollToOffset({ offset: 0, animated: true }),
         100
       );
     }
-  }, [serverMessages.length]);
+  }, [messages.length]);
 
   const panelAnim = useRef(new Animated.Value(0)).current;
 
-  // ── Load recent photos (new v57 Query API) ──
-  useEffect(() => {
-    (async () => {
-      const { status } = await requestMediaPermissionsAsync();
-      if (status === "granted") {
-        setMediaPermission(true);
-        try {
-          const assets: Asset[] = await new Query()
-            .limit(10)
-            .eq(AssetField.MEDIA_TYPE, MediaType.IMAGE)
-            .exe();
-          const withUris = await Promise.all(
-            assets.map(async (a) => ({ id: a.id, uri: await a.getUri() }))
-          );
-          setRecentPhotos(withUris);
-        } catch {}
-      }
-    })();
-  }, []);
+  // ── Load recent photos when panel opens ──
+  const loadRecentPhotos = async () => {
+    const { status } = await requestMediaPermissionsAsync();
+    if (status === "granted") {
+      setMediaPermission(true);
+      try {
+        const assets: Asset[] = await new Query()
+          .limit(10)
+          .eq(AssetField.MEDIA_TYPE, MediaType.IMAGE)
+          .exe();
+        const withUris = await Promise.all(
+          assets.map(async (a) => ({ id: a.id, uri: await a.getUri() }))
+        );
+        setRecentPhotos(withUris);
+      } catch {}
+    }
+  };
 
   // ── Animate panel ──
   const openPanel = () => {
+    loadRecentPhotos();
     setShowMediaPanel(true);
     Animated.spring(panelAnim, {
       toValue: 1,
@@ -192,8 +184,10 @@ export default function ChatDetailScreen() {
   const handleSend = () => {
     if (!message.trim() || !conversationId) return;
     const text = message.trim();
+    const payload = createSendPayload(conversationId, text);
+    // Only clear input optimistically — it's already added to cache by onMutate
     setMessage("");
-    sendMessage.mutate({ conversationId, text });
+    sendMessage.mutate(payload);
   };
 
   // ── Typing (from realtime hook above) ──
@@ -306,14 +300,16 @@ export default function ChatDetailScreen() {
       ) : (
         <FlatList
           ref={listRef}
-          data={serverMessages}
+          data={messages}
           inverted
           keyExtractor={(item) => item.id}
           contentContainerStyle={{ padding: 16, paddingTop: 8 }}
+          onEndReached={() => {
+            if (hasNextPage && !isFetchingNextPage) fetchNextPage();
+          }}
+          onEndReachedThreshold={0.3}
           renderItem={({ item }) => {
             const isMe = item.senderId === currentUserId;
-            // Added log as requested
-            console.log("ChatDetailScreen Render Message:", { senderId: item.senderId, currentUserId, isMe, text: item.text });
             const time = new Date(item.createdAt).toLocaleTimeString([], {
               hour: "2-digit",
               minute: "2-digit",
@@ -344,7 +340,17 @@ export default function ChatDetailScreen() {
                 >
                   <Text className="text-body-xs text-muted">{time}</Text>
                   {isMe && (
-                    <Feather name="check-circle" size={11} color="#57b77d" />
+                    <Feather
+                      name={
+                        item.status === "sending"
+                          ? "clock"
+                          : item.status === "failed"
+                          ? "alert-circle"
+                          : "check-circle"
+                      }
+                      size={11}
+                      color={item.status === "failed" ? "#ef4444" : "#57b77d"}
+                    />
                   )}
                 </View>
               </View>

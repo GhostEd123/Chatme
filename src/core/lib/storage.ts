@@ -1,4 +1,9 @@
 // @/lib/storage.ts
-import { createMMKV } from "react-native-mmkv";
+import { MMKV } from "react-native-mmkv";
 
-export const storage = createMMKV({ id: "chatme-storage" });
+// Use a fixed encryption key as a baseline improvement.
+// TODO: Derive from secure device storage (expo-secure-store) during app bootstrap.
+export const storage = new MMKV({
+  id: "chatme-storage",
+  encryptionKey: "chatme-mmkv-enc-v1",
+});

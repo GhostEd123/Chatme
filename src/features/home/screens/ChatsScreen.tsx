@@ -21,9 +21,6 @@ import {
 import { StatusBar } from "expo-status-bar";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { withUniwind } from "uniwind";
-import * as SecureStore from "expo-secure-store";
-import PinDotsWidget from "@/shared/widgets/PinDotsWidget";
-import NumpadWidget from "@/shared/widgets/NumpadWidget";
 import { useThemeStore, THEME_PALETTE } from "@/core/store/themeStore";
 
 const StyledFeather = withUniwind(Feather);
@@ -123,30 +120,8 @@ export default function ChatsScreen() {
 
   const chats = allChats.filter((c) => !c.isArchived);
 
-  const [appLockedState, setAppLockedState] = useState<"checking" | "locked" | "unlocked">("checking");
-  const [savedPin, setSavedPin] = useState<string | null>(null);
-  const [unlockPinInput, setUnlockPinInput] = useState("");
-  const [unlockError, setUnlockError] = useState(false);
   const [showPinPrompt, setShowPinPrompt] = useState(false);
 
-  React.useEffect(() => {
-    (async () => {
-      try {
-        const pin = await SecureStore.getItemAsync("chatme_pin");
-        if (pin) {
-          setSavedPin(pin);
-          setAppLockedState("locked");
-        } else {
-          setAppLockedState("unlocked");
-          if (user?.hasPinSetup === undefined) {
-            setShowPinPrompt(true);
-          }
-        }
-      } catch (err) {
-        setAppLockedState("unlocked");
-      }
-    })();
-  }, [user?.hasPinSetup]);
   const [fabOpen, setFabOpen] = useState(false);
 
   // Three independent animation values for staggered reveal

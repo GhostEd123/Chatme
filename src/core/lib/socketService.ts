@@ -1,6 +1,7 @@
 import { SOCKET_PATH, SOCKET_URL } from "@/shared/constants/config";
 import { io, Socket } from "socket.io-client";
 import { useAuthStore } from "@/features/auth/store/authStore";
+import { refreshAccessToken } from "@/core/lib/apiClient";
 import {
   useSocketStore,
   MessageCreatedEvent,
@@ -158,44 +159,20 @@ class SocketService {
   private async _handleReconnect(): Promise<void> {
     if (this.reconnectTimer) return; // already in progress
 
-    const { refreshToken, updateAccessToken, clearSession } =
-      useAuthStore.getState();
+    // Use the shared refresh logic from apiClient — avoids duplicate fetches
+    // and respects the single refreshPromise deduplication.
+    const newToken = await refreshAccessToken();
 
-    if (!refreshToken) {
-      clearSession();
+    if (!newToken) {
+      // refreshAccessToken already called clearSession() on definitive failure.
       return;
     }
 
-    // Attempt token refresh
-    try {
-      const res = await fetch(
-        `https://chateo-lhuw.onrender.com/v1/auth/refresh`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ refreshToken }),
-        }
-      );
-
-      if (!res.ok) {
-        clearSession();
-        return;
-      }
-
-      const data = await res.json();
-      updateAccessToken(data.accessToken);
-      if (data.refreshToken) {
-        useAuthStore.setState({ refreshToken: data.refreshToken });
-      }
-
-      // Brief delay before reconnecting
-      this.reconnectTimer = setTimeout(() => {
-        this.reconnectTimer = null;
-        this.connect(data.accessToken);
-      }, 1_000);
-    } catch {
-      clearSession();
-    }
+    // Brief delay before reconnecting
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connect(newToken);
+    }, 1_000);
   }
 
   private destroy(): void {

@@ -1,6 +1,7 @@
 import { clientStoragePersister } from "@/core/lib/persister";
 import { queryClient } from "@/core/lib/queryClient";
 import SocketProvider from "@/core/providers/SocketProvider";
+import AppLockProvider from "@/core/providers/AppLockProvider";
 import { THEME_PALETTE, useThemeStore } from "@/core/store/themeStore";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import { ReactNode, useEffect } from "react";
@@ -64,7 +65,9 @@ const AppProviders = ({ children }: { children: ReactNode }) => {
           <KeyboardProvider>
             <SocketProvider>
               <ThemeInjector />
-              {children}
+              <AppLockProvider>
+                {children}
+              </AppLockProvider>
             </SocketProvider>
           </KeyboardProvider>
         </SafeAreaListener>

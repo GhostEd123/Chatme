@@ -4,12 +4,14 @@ import {
   TabBarLabelSize,
   TabBarLayout,
 } from "@/shared/constants/TabsConfig";
-import { Tabs } from "expo-router";
+import { Tabs, useRouter } from "expo-router";
+import { useEffect } from "react";
 import { ColorValue, Text, ViewStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { SvgProps } from "react-native-svg";
 import { useCSSVariable } from "uniwind";
 import { useThemeStore, THEME_PALETTE } from "@/core/store/themeStore";
+import { useAuthStore } from "@/features/auth/store/authStore";
 
 function renderIcon(Icon: React.FC<SvgProps>, focused: boolean) {
   return (
@@ -24,6 +26,14 @@ function renderIcon(Icon: React.FC<SvgProps>, focused: boolean) {
 
 export default function TabsLayout() {
   const insets = useSafeAreaInsets();
+  const { user, accessToken } = useAuthStore();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!user?.id || !accessToken) {
+      router.replace('/');
+    }
+  }, [user, accessToken]);
   const [surface, neutral300, fontMd, fontBold] = useCSSVariable([
     "--color-surface",
     "--color-neutral-300",

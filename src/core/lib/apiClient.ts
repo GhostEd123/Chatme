@@ -27,10 +27,43 @@ export class ApiException extends Error {
   }
 }
 
-async function refreshAccessToken(): Promise<string | null> {
+// ── Session generation guard ────────────────────────────────────────────────────
+// Incremented on every logout / clearSession so any in-flight refresh that
+// completes after a new session has started discards its result.
+let sessionGeneration = 0;
+
+export function bumpSessionGeneration(): void {
+  sessionGeneration += 1;
+}
+
+export function getCurrentSessionGeneration(): number {
+  return sessionGeneration;
+}
+
+// ── Single shared refresh promise ──────────────────────────────────────────────
+// All concurrent 401 callers await the same promise so only one refresh fetch
+// goes out (important when the server rotates refresh tokens).
+let refreshPromise: Promise<string | null> | null = null;
+
+export async function refreshAccessToken(): Promise<string | null> {
+  // If a refresh is already in flight, return the same promise.
+  if (refreshPromise) return refreshPromise;
+
+  refreshPromise = _doRefresh().finally(() => {
+    refreshPromise = null;
+  });
+
+  return refreshPromise;
+}
+
+async function _doRefresh(): Promise<string | null> {
   const { refreshToken, updateAccessToken, clearSession } =
     useAuthStore.getState();
   if (!refreshToken) return null;
+
+  // Capture the generation before the async work so we can detect a
+  // concurrent logout that happened while we were waiting.
+  const generationAtStart = sessionGeneration;
 
   try {
     const res = await fetch(`${API_BASE_URL}/auth/refresh`, {
@@ -40,10 +73,13 @@ async function refreshAccessToken(): Promise<string | null> {
     });
 
     if (!res.ok) {
-      // Refresh failed — wipe session so user goes back to login
+      // Definitive auth failure — wipe session so user goes back to login.
       clearSession();
       return null;
     }
+
+    // If a logout happened while we were waiting, discard the result.
+    if (sessionGeneration !== generationAtStart) return null;
 
     const data = await res.json();
     updateAccessToken(data.accessToken);
@@ -53,7 +89,10 @@ async function refreshAccessToken(): Promise<string | null> {
     }
     return data.accessToken as string;
   } catch {
-    clearSession();
+    // Network / parse error — do NOT clear the session; the user may just
+    // be offline temporarily. Clearing here would log them out on flaky
+    // connections. Only a definitive non-ok response from the server
+    // warrants a session wipe (handled above).
     return null;
   }
 }
@@ -95,26 +134,27 @@ export async function apiRequest<T = unknown>(
     let errorMessage = `HTTP ${res.status}`;
     try {
       const errBody = await res.json();
-      console.log(`[API_ERROR] [${res.status}] ${method} ${path}`, errBody);
+      // Redact any token values before logging
+      const safeBody = { ...errBody };
+      if (safeBody.accessToken) safeBody.accessToken = "[REDACTED]";
+      if (safeBody.refreshToken) safeBody.refreshToken = "[REDACTED]";
+      console.error(`[API_ERROR] [${res.status}] ${method} ${path}`, safeBody);
       // Handle both flat { code, message } and nested { error: { code, message } }
       const errObj: ApiError = errBody?.error ?? errBody;
       errorCode = errObj?.code ?? errorCode;
       errorMessage = errObj?.message ?? errorMessage;
     } catch {
       /* ignore parse errors */
-      console.log(`[API_ERROR] [${res.status}] ${method} ${path} (Failed to parse JSON body)`);
+      console.error(`[API_ERROR] [${res.status}] ${method} ${path} (Failed to parse JSON body)`);
     }
     throw new ApiException(res.status, errorCode, errorMessage);
   }
 
   // 204 No Content
   if (res.status === 204) {
-    console.log(`[API_RESPONSE] [204] ${method} ${path}`);
     return undefined as T;
   }
 
   const responseBody = await res.json();
-  console.log(`[API_RESPONSE] [${res.status}] ${method} ${path}`, JSON.stringify(responseBody, null, 2));
-  
   return responseBody as T;
 }
