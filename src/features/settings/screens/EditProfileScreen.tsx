@@ -2,7 +2,7 @@ import Spacer from "@/shared/components/Spacer";
 import AvatarWidget from "@/shared/widgets/AvatarWidget";
 import Feather from "@expo/vector-icons/Feather";
 import { useRouter } from "expo-router";
-import { Text, TextInput, TouchableOpacity, View, ActivityIndicator } from "react-native";
+import { Text, TextInput, TouchableOpacity, View } from "react-native";
 import { withUniwind } from "uniwind";
 import ChatLayoutWrapper from "@/shared/components/ChatLayoutWrapper";
 import ThemedButton from "@/shared/components/ThemedButton";

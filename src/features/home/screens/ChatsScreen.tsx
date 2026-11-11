@@ -245,7 +245,7 @@ export default function ChatsScreen() {
       ) : isError ? (
         <View className="flex-1 items-center justify-center px-8">
           <Feather name="wifi-off" size={40} color="#6e8597" />
-          <Text className="mt-3 text-body-lg font-display-bold text-foreground text-center">Couldn't load chats</Text>
+          <Text className="mt-3 text-body-lg font-display-bold text-foreground text-center">Couldn&apos;t load chats</Text>
           <Text className="mt-1 text-body-md text-muted text-center mb-5">Check your connection and try again.</Text>
           <TouchableOpacity
             onPress={() => refetch()}

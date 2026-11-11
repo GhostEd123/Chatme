@@ -21,6 +21,8 @@ export interface OutboxAttachment {
   type: MessageAttachment["type"];
   /** Idempotency key for POST /media/uploads — reused on retry. */
   clientUploadId: string;
+  /** Set to true once bytes are successfully transferred to Cloudinary */
+  transferComplete?: boolean;
   /**
    * Set once POST /media/uploads/{id}/complete returns `ready`. When present,
    * retry skips the upload entirely and reuses this verified media ID.
@@ -91,9 +93,6 @@ export const useOutboxStore = create<OutboxState>()(
       name: "chatme-outbox",
       storage: createJSONStorage(() => zustandMmkvStorage),
       partialize: (s) => ({ entries: s.entries }),
-      // Anything still "uploading"/"sending" when the app was killed was
-      // interrupted: surface it as failed so the user can retry explicitly.
-      // The original clientMessageId, payload and any verified mediaId are kept.
       merge: (persisted, current) => {
         const entries = (persisted as Partial<OutboxState> | undefined)?.entries ?? {};
         const fixed: Record<string, OutboxEntry> = {};

@@ -1,4 +1,7 @@
 import { socketService } from "@/core/lib/socketService";
+import { queryClient } from "@/core/lib/queryClient";
+import { useAuthStore } from "@/features/auth/store/authStore";
+import { messagesQueryKey } from "@/features/home/hooks/useMessages";
 import {
   ParticipantPresence,
   TypingUser,
@@ -23,12 +26,16 @@ const EMPTY_TYPING: TypingUser[] = [];
 /**
  * Subscribe to real-time presence and typing for a single conversation.
  *
- * Automatically emits `presence.subscribe` on mount and
- * `presence.unsubscribe` on unmount.
+ * Automatically binds subscription ownership to connection readiness and
+ * reconnect identity (connectionEpoch). When the socket becomes connected or
+ * reconnects after network recovery, it restores subscriptions and fetches
+ * missed message history.
  */
 export function useConversationRealtime(
   conversationId: string | undefined
 ): UseConversationRealtimeResult {
+  const connected = useSocketStore((s) => s.connected);
+  const connectionEpoch = useSocketStore((s) => s.connectionEpoch);
   const subscribeConversation = useSocketStore((s) => s.subscribeConversation);
   const unsubscribeConversation = useSocketStore(
     (s) => s.unsubscribeConversation
@@ -41,18 +48,31 @@ export function useConversationRealtime(
         : EMPTY_PARTICIPANTS
   );
 
-  const typingUsers = useSocketStore(
-    (s) =>
-      conversationId
-        ? (s.conversations[conversationId]?.typing ?? EMPTY_TYPING)
-        : EMPTY_TYPING
-  );
+  // Expire typing based on server deadline (expiresAt)
+  const typingUsers = useSocketStore((s) => {
+    if (!conversationId) return EMPTY_TYPING;
+    const now = Date.now();
+    return (s.conversations[conversationId]?.typing ?? EMPTY_TYPING).filter(
+      (t) => new Date(t.expiresAt).getTime() > now
+    );
+  });
 
-  // Track whether we've already subscribed so we don't double-subscribe
+  // Sweep expired typing timers every second while mounted
+  useEffect(() => {
+    const sweep = setInterval(() => {
+      useSocketStore.getState().cleanExpiredTyping();
+    }, 1_000);
+    return () => clearInterval(sweep);
+  }, []);
+
+  // Track subscription ownership
   const subscribedRef = useRef(false);
 
   useEffect(() => {
-    if (!conversationId) return;
+    if (!conversationId || !connected) {
+      subscribedRef.current = false;
+      return;
+    }
 
     let cancelled = false;
 
@@ -71,10 +91,18 @@ export function useConversationRealtime(
           typing: data.typing ?? [],
         });
         subscribedRef.current = true;
+
+        // Catch-up: fetch any messages missed while disconnected or reconnecting
+        const userId = useAuthStore.getState().user?.id ?? "";
+        if (userId) {
+          queryClient.invalidateQueries({
+            queryKey: messagesQueryKey(userId, conversationId),
+          });
+        }
       }
     };
 
-    subscribe();
+    void subscribe();
 
     return () => {
       cancelled = true;
@@ -84,8 +112,7 @@ export function useConversationRealtime(
         subscribedRef.current = false;
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conversationId]);
+  }, [conversationId, connected, connectionEpoch, subscribeConversation, unsubscribeConversation]);
 
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 

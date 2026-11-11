@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { MessageAttachment } from "@/features/home/hooks/useMessages";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -22,8 +23,10 @@ export interface MessageCreatedEvent {
   conversationId: string;
   clientMessageId: string;
   senderId: string;
-  kind: string;
-  text: string;
+  kind: "text" | "image" | "audio" | "video" | "document";
+  text: string | null;
+  attachments?: MessageAttachment[];
+  links?: string[];
   createdAt: string;
 }
 
@@ -60,10 +63,14 @@ export interface TypingStoppedEvent {
 
 type SocketState = {
   connected: boolean;
+  /** Monotonically increasing counter incremented on every new connection/reconnect */
+  connectionEpoch: number;
   /** Keyed by conversationId */
   conversations: Record<string, ConversationRealtimeState>;
 
   setConnected: (connected: boolean) => void;
+  incrementConnectionEpoch: () => void;
+  clearAllPresenceAndTyping: () => void;
 
   subscribeConversation: (
     conversationId: string,
@@ -74,6 +81,10 @@ type SocketState = {
   applyPresenceChanged: (event: PresenceChangedEvent) => void;
   applyTypingStarted: (event: TypingStartedEvent) => void;
   applyTypingStopped: (event: TypingStoppedEvent) => void;
+  cleanExpiredTyping: () => void;
+
+  applyReceiptDelivered: (event: ReceiptEvent) => void;
+  applyReceiptRead: (event: ReceiptEvent) => void;
 
   // Incoming message events — stored per conversation for real-time list updates
   incomingMessages: Record<string, MessageCreatedEvent[]>;
@@ -83,10 +94,25 @@ type SocketState = {
 
 export const useSocketStore = create<SocketState>()((set) => ({
   connected: false,
+  connectionEpoch: 0,
   conversations: {},
   incomingMessages: {},
 
   setConnected: (connected) => set({ connected }),
+  incrementConnectionEpoch: () =>
+    set((state) => ({ connectionEpoch: state.connectionEpoch + 1 })),
+
+  clearAllPresenceAndTyping: () =>
+    set((state) => {
+      const reset: Record<string, ConversationRealtimeState> = {};
+      for (const [id, conv] of Object.entries(state.conversations)) {
+        reset[id] = {
+          participants: conv.participants.map((p) => ({ ...p, status: "offline" })),
+          typing: [],
+        };
+      }
+      return { conversations: reset };
+    }),
 
   subscribeConversation: (conversationId, initial) =>
     set((state) => ({
@@ -94,7 +120,9 @@ export const useSocketStore = create<SocketState>()((set) => ({
         ...state.conversations,
         [conversationId]: {
           participants: initial.participants,
-          typing: initial.typing,
+          typing: initial.typing.filter(
+            (t) => new Date(t.expiresAt).getTime() > Date.now()
+          ),
         },
       },
     })),
@@ -129,8 +157,10 @@ export const useSocketStore = create<SocketState>()((set) => ({
     set((state) => {
       const conv = state.conversations[event.conversationId];
       if (!conv) return state;
+      // Filter out any typing that has already expired
+      const now = Date.now();
       const withoutOld = conv.typing.filter(
-        (t) => t.userId !== event.userId
+        (t) => t.userId !== event.userId && new Date(t.expiresAt).getTime() > now
       );
       return {
         conversations: {
@@ -160,6 +190,33 @@ export const useSocketStore = create<SocketState>()((set) => ({
         },
       };
     }),
+
+  cleanExpiredTyping: () =>
+    set((state) => {
+      const now = Date.now();
+      let changed = false;
+      const updated: Record<string, ConversationRealtimeState> = {};
+      for (const [id, conv] of Object.entries(state.conversations)) {
+        const validTyping = conv.typing.filter(
+          (t) => new Date(t.expiresAt).getTime() > now
+        );
+        if (validTyping.length !== conv.typing.length) {
+          changed = true;
+          updated[id] = { ...conv, typing: validTyping };
+        } else {
+          updated[id] = conv;
+        }
+      }
+      return changed ? { conversations: updated } : state;
+    }),
+
+  applyReceiptDelivered: (_event) => {
+    // Handled in tandem with query invalidation
+  },
+
+  applyReceiptRead: (_event) => {
+    // Handled in tandem with query invalidation
+  },
 
   pushIncomingMessage: (event) =>
     set((state) => {

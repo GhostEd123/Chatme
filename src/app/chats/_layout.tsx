@@ -1,26 +1,28 @@
 /**
  * Auth guard for all /chats/* routes.
  *
- * A signed-out user who deep-links directly into /chats/[id] is redirected to
- * the root index which will carry them through session restoration and the auth
- * flow before eventually arriving at this route.
+ * A signed-out user who deep-links directly into /chats/[id] has their target
+ * path captured in pendingRedirect, is redirected through the authentication flow,
+ * and upon successful authentication lands on their intended conversation.
  */
 import { useAuthStore } from "@/features/auth/store/authStore";
-import { Stack, useRouter } from "expo-router";
+import { Stack, usePathname, useRouter } from "expo-router";
 import { useEffect } from "react";
 import { ActivityIndicator, View } from "react-native";
 
 export default function ChatsLayout() {
   const router = useRouter();
+  const pathname = usePathname();
   const { user, accessToken } = useAuthStore();
 
   useEffect(() => {
-    // If there is no authenticated session, redirect to root (which handles
-    // the auth flow). This covers cold-starts directly into a private chat.
     if (!user?.id || !accessToken) {
+      if (pathname && pathname !== "/" && !pathname.startsWith("/(auth)")) {
+        useAuthStore.getState().setPendingRedirect(pathname);
+      }
       router.replace("/");
     }
-  }, [user, accessToken]);
+  }, [user, accessToken, pathname, router]);
 
   // While we don't yet know the session state, show a spinner rather than
   // flashing the protected content.
@@ -40,4 +42,3 @@ export default function ChatsLayout() {
     </Stack>
   );
 }
-

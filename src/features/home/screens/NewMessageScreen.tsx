@@ -5,7 +5,6 @@ import { useRouter } from "expo-router";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
-  FlatList,
   Linking,
   SectionList,
   Text,
@@ -14,11 +13,8 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { withUniwind } from "uniwind";
 import { useMatchContacts } from "@/features/home/hooks/useMatchContacts";
 import { useCreateDirectConversation } from "@/features/home/hooks/useCreateDirectConversation";
-
-const StyledFeather = withUniwind(Feather);
 
 // ── Types ────────────────────────────────────────────────────────────────────
 interface ContactItem {
@@ -101,7 +97,7 @@ export default function NewMessageScreen() {
       }
       setIsMatching(false);
     })();
-  }, []);
+  }, [matchContacts]);
 
   // ── Filter + group ──
   const sections: Section[] = useMemo(() => {

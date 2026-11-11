@@ -41,9 +41,13 @@ const VerifyScreen = () => {
       // Clear transient onboarding state once used
       clearOnboarding();
 
-      // If profile is complete navigate to app, else continue setup
-      if (result.user.profileComplete && result.user.displayName) {
-        router.replace("/chats");
+      // If pending redirect was captured before sign in (e.g. cold start into private chat), navigate there
+      const pending = useAuthStore.getState().pendingRedirect;
+      if (pending) {
+        useAuthStore.getState().setPendingRedirect(null);
+        router.replace(pending as any);
+      } else if (result.user.profileComplete && result.user.displayName) {
+        router.replace("/(tabs)/chats");
       } else {
         router.push("/(auth)/name");
       }

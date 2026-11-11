@@ -38,7 +38,7 @@ function ThemeInjector() {
       // 'light' and 'dark' are the theme names registered via global.css @variant
       Uniwind.updateCSSVariables("light", vars);
       Uniwind.updateCSSVariables("dark", vars);
-    } catch (_) {
+    } catch {
       // Silently ignore if theme names aren't registered
     }
   }, [theme]);

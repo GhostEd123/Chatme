@@ -30,7 +30,7 @@ export default function BlockedContactScreen() {
         contentContainerClassName="p-6"
         ListFooterComponent={() => (
           <Text className="text-body-sm text-muted mt-4">
-            Blocked contacts can't send messages and call you.
+            Blocked contacts can&apos;t send messages and call you.
           </Text>
         )}
         renderItem={({ item }) => (

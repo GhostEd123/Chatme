@@ -3,7 +3,6 @@ import Feather from "@expo/vector-icons/Feather";
 import { useRouter } from "expo-router";
 import { Text, TouchableOpacity, View } from "react-native";
 import { withUniwind } from "uniwind";
-import ChatLayoutWrapper from "@/shared/components/ChatLayoutWrapper";
 
 const StyledFeather = withUniwind(Feather);
 

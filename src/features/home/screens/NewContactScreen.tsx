@@ -74,7 +74,6 @@ export default function NewContactScreen() {
         setSaving(false);
         return;
       }
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await (Contacts.addContactAsync as any)({
         firstName: firstName.trim(),
         lastName: lastName.trim(),

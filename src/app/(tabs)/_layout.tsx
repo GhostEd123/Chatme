@@ -33,7 +33,7 @@ export default function TabsLayout() {
     if (!user?.id || !accessToken) {
       router.replace('/');
     }
-  }, [user, accessToken]);
+  }, [user, accessToken, router]);
   const [surface, neutral300, fontMd, fontBold] = useCSSVariable([
     "--color-surface",
     "--color-neutral-300",

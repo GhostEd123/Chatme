@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react';
-import { useAuthStore } from '@/features/auth/store/authStore';
-import { useRouter } from 'expo-router';
-import { View, ActivityIndicator } from 'react-native';
-import { WelcomeScreen } from '@/features/welcome';
+import { useEffect, useState } from "react";
+import { useAuthStore } from "@/features/auth/store/authStore";
+import { useRouter } from "expo-router";
+import { View, ActivityIndicator } from "react-native";
+import { WelcomeScreen } from "@/features/welcome";
 
 export default function Index() {
   const router = useRouter();
@@ -17,13 +17,19 @@ export default function Index() {
   useEffect(() => {
     if (!hydrated) return;
     if (user?.id && accessToken) {
-      router.replace('/(tabs)/chats');
+      const pending = useAuthStore.getState().pendingRedirect;
+      if (pending) {
+        useAuthStore.getState().setPendingRedirect(null);
+        router.replace(pending as any);
+      } else {
+        router.replace("/(tabs)/chats");
+      }
     }
-  }, [hydrated, user, accessToken]);
+  }, [hydrated, user, accessToken, router]);
 
   if (!hydrated) {
     return (
-      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+      <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
         <ActivityIndicator size="large" color="#57b77d" />
       </View>
     );
@@ -32,7 +38,7 @@ export default function Index() {
   // Authenticated users will be redirected above; only unauthenticated users see this
   if (user?.id && accessToken) {
     return (
-      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+      <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
         <ActivityIndicator size="large" color="#57b77d" />
       </View>
     );

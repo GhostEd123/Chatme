@@ -4,6 +4,7 @@ import {
   bumpSessionGeneration,
   getCurrentSessionGeneration,
 } from "@/core/lib/session";
+import { performTerminalTeardown } from "@/core/lib/sessionTeardown";
 
 // Re-exported for existing callers.
 export { bumpSessionGeneration, getCurrentSessionGeneration };
@@ -144,7 +145,7 @@ async function _doRefresh(generationAtStart: number): Promise<RefreshOutcome> {
     // Only an explicit credential rejection ends the session. 5xx, 429,
     // 408 etc. are temporary server conditions — keep the user signed in.
     if (res.status === 400 || res.status === 401 || res.status === 403) {
-      useAuthStore.getState().clearSession();
+      void performTerminalTeardown();
       return { kind: "rejected" };
     }
     return { kind: "temporary" };
@@ -210,6 +211,11 @@ export async function apiRequest<T = unknown>(
 
   // Auto-refresh on 401
   if (res.status === 401 && !skipAuth) {
+    // Discard a stale original 401 before starting a refresh for the current session:
+    // If the session changed while the initial request was in flight, do not refresh under the new session.
+    if (getCurrentSessionGeneration() !== generationAtStart) {
+      throw new ApiException(401, "AUTH_SESSION_EXPIRED", "Session expired.");
+    }
     const outcome = await refreshSession();
     if (outcome.kind === "ok" && getCurrentSessionGeneration() === generationAtStart) {
       res = await makeRequest(outcome.accessToken);
@@ -217,6 +223,11 @@ export async function apiRequest<T = unknown>(
       // Couldn't refresh right now (server/network) — surface as a
       // recoverable network error rather than an auth failure.
       throw new NetworkException("Couldn't refresh your session. Try again.");
+    } else if (outcome.kind === "rejected") {
+      void performTerminalTeardown();
+      throw new ApiException(401, "AUTH_CREDENTIALS_REJECTED", "Your session has expired. Please sign in again.");
+    } else {
+      throw new ApiException(401, "AUTH_SESSION_EXPIRED", "Session expired.");
     }
   }
 

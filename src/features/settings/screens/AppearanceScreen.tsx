@@ -56,9 +56,8 @@ export default function AppearanceScreen() {
   const handleSetAppIcon = async (icon: AppIconName) => {
     setAppIcon(icon);
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await setNativeAppIcon(icon as any);
-    } catch (_) {
+    } catch {
       // setNativeAppIcon may throw in Expo Go; silently ignore
     }
   };

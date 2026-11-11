@@ -3,7 +3,7 @@ import { io, Socket } from "socket.io-client";
 import { useAuthStore } from "@/features/auth/store/authStore";
 import {
   getCurrentSessionGeneration,
-  refreshAccessToken,
+  refreshSession,
 } from "@/core/lib/apiClient";
 import {
   useSocketStore,
@@ -13,6 +13,8 @@ import {
   TypingStartedEvent,
   TypingStoppedEvent,
 } from "@/core/store/socketStore";
+import { upsertMessageInCache } from "@/features/home/utils/messageReconcile";
+import { queryClient } from "@/core/lib/queryClient";
 
 // Server → client events
 interface ServerToClientEvents {
@@ -62,8 +64,7 @@ class SocketService {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   /** How many consecutive reconnect attempts have been made */
   private _retryCount = 0;
-  /** Session generation captured when the last connect() was called.
-   *  Used to stop reconnect loops that belong to a previous session. */
+  /** Session generation captured when connect() was called */
   private _sessionAtConnect = -1;
 
   /** Connects (or reconnects) to the /chat namespace with the given token. */
@@ -73,7 +74,6 @@ class SocketService {
 
     // Record the session generation so reconnect loops can self-cancel
     this._sessionAtConnect = getCurrentSessionGeneration();
-    this._retryCount = 0;
 
     // Clean up any existing socket
     this.destroy();
@@ -96,7 +96,9 @@ class SocketService {
   /** Disconnect and clean up — also cancels any pending reconnect. */
   disconnect(): void {
     this.destroy();
-    useSocketStore.getState().setConnected(false);
+    const store = useSocketStore.getState();
+    store.setConnected(false);
+    store.clearAllPresenceAndTyping();
   }
 
   /** Emit a Socket.IO event with an acknowledgement, returns a promise. */
@@ -131,10 +133,16 @@ class SocketService {
       // Successful connection — reset the retry counter
       this._retryCount = 0;
       store.setConnected(true);
+      store.incrementConnectionEpoch();
+
+      // Catch-up refetch after reconnect: invalidate conversations and messages
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+      queryClient.invalidateQueries({ queryKey: ["messages"] });
     });
 
     this.socket.on("disconnect", async (reason) => {
       store.setConnected(false);
+      store.clearAllPresenceAndTyping();
 
       // Server-initiated close or transport dropped — attempt reconnect.
       // "io client disconnect" means we called socket.disconnect() ourselves,
@@ -157,18 +165,30 @@ class SocketService {
         // Token expired/invalid → refresh and retry
         await this._scheduleReconnect(/* needsTokenRefresh */ true);
       } else {
-        // Generic connection error (e.g. network down, DNS, server not up yet)
-        // — schedule a reconnect with backoff but do NOT refresh the token.
+        // Generic connection error (e.g. network down, DNS, server offline)
+        // — schedule a reconnect with backoff without refreshing the token.
         await this._scheduleReconnect(/* needsTokenRefresh */ false);
       }
     });
 
-    // ── Server event → store ──
+    // ── Server event → store & shared reconciliation ──
     this.socket.on("message.created", (event) => {
       store.pushIncomingMessage(event);
-      import("@/core/lib/queryClient").then(({ queryClient }) => {
-        queryClient.invalidateQueries({ queryKey: ["conversations"] });
+
+      // Pass complete validated event through shared reconciliation helper
+      upsertMessageInCache(event.conversationId, {
+        id: event.id,
+        conversationId: event.conversationId,
+        clientMessageId: event.clientMessageId,
+        senderId: event.senderId,
+        kind: event.kind,
+        text: event.text,
+        attachments: event.attachments,
+        createdAt: event.createdAt,
+        status: "delivered",
       });
+
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
     });
 
     this.socket.on("presence.changed", (event) => {
@@ -183,33 +203,57 @@ class SocketService {
       store.applyTypingStopped(event);
     });
 
-    // Receipt events are forwarded to the query cache via invalidation
-    this.socket.on("receipt.delivered", () => {});
-    this.socket.on("receipt.read", () => {});
+    // Receipt events update message delivery/read state in the cache
+    this.socket.on("receipt.delivered", (event) => {
+      store.applyReceiptDelivered(event);
+      queryClient.invalidateQueries({ queryKey: ["messages"] });
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    });
+
+    this.socket.on("receipt.read", (event) => {
+      store.applyReceiptRead(event);
+      queryClient.invalidateQueries({ queryKey: ["messages"] });
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    });
   }
 
   /**
    * Schedule a reconnection attempt with bounded exponential backoff.
-   * If `needsTokenRefresh` is true, we first refresh the access token.
-   * The reconnect is silently cancelled if the session has changed (logout /
-   * account switch) since this socket was originally connected.
+   * If `needsTokenRefresh` is true, we call refreshSession().
+   * Handles structured refresh outcomes:
+   *   - "ok": proceeds to reconnect
+   *   - "temporary": retries with backoff instead of terminating
+   *   - "rejected" / "stale": terminates recovery loop
    */
   private async _scheduleReconnect(needsTokenRefresh: boolean): Promise<void> {
-    // Don't double-schedule
     if (this.reconnectTimer) return;
 
-    // ── Session boundary check ────────────────────────────────────────────
-    // If the user has logged out or switched accounts, the session generation
-    // will have been bumped.  Stop reconnecting for the old session.
+    // ── Session boundary check 1 ──────────────────────────────────────────
     if (getCurrentSessionGeneration() !== this._sessionAtConnect) return;
 
-    // ── Token refresh (if required) ───────────────────────────────────────
     let token: string | null = null;
     if (needsTokenRefresh) {
-      token = await refreshAccessToken();
-      if (!token) {
-        // Definitive auth failure — clearSession() was already called inside
-        // refreshAccessToken.  Nothing more to do.
+      const outcome = await refreshSession();
+      // Session boundary check 2 (after async refresh)
+      if (getCurrentSessionGeneration() !== this._sessionAtConnect) return;
+
+      if (outcome.kind === "ok") {
+        token = outcome.accessToken;
+      } else if (outcome.kind === "temporary") {
+        // TEMPORARY FAILURE (network or 5xx error): Keep trying with exponential backoff!
+        const delay = Math.min(
+          BACKOFF_BASE_MS * Math.pow(BACKOFF_MULTIPLIER, this._retryCount),
+          BACKOFF_MAX_MS
+        );
+        this._retryCount += 1;
+        this.reconnectTimer = setTimeout(() => {
+          this.reconnectTimer = null;
+          if (getCurrentSessionGeneration() !== this._sessionAtConnect) return;
+          void this._scheduleReconnect(true);
+        }, delay);
+        return;
+      } else {
+        // "rejected" or "stale" — terminal auth failure for this session
         return;
       }
     } else {
@@ -217,7 +261,7 @@ class SocketService {
       if (!token) return;
     }
 
-    // ── Re-check session after the async refresh ──────────────────────────
+    // ── Session boundary check 3 ──────────────────────────────────────────
     if (getCurrentSessionGeneration() !== this._sessionAtConnect) return;
 
     // ── Backoff delay ─────────────────────────────────────────────────────
@@ -230,7 +274,6 @@ class SocketService {
     const capturedToken = token;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      // Final session check just before we reconnect
       if (getCurrentSessionGeneration() !== this._sessionAtConnect) return;
       this.connect(capturedToken);
     }, delay);

@@ -1,7 +1,6 @@
 import AvatarWidget from "@/shared/widgets/AvatarWidget";
 import Feather from "@expo/vector-icons/Feather";
-import { useRouter } from "expo-router";
-import React, { useState } from "react";
+import React from "react";
 import {
   Alert,
   FlatList,
@@ -212,7 +211,6 @@ function CallRow({ call }: { call: CallRecord }) {
 // ── Screen ────────────────────────────────────────────────────────────────────
 export default function CallsScreen() {
   const insets = useSafeAreaInsets();
-  const router = useRouter();
 
   const sections = groupCallsByDate(ALL_CALLS);
 

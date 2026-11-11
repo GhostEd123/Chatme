@@ -9,7 +9,9 @@ import {
 import {
   isUploadKeyExhausted,
   MediaValidationError,
+  SessionMismatchError,
   uploadAttachment,
+  validateAttachment,
 } from "@/features/home/hooks/useMediaUpload";
 import { upsertMessageInCache } from "../utils/messageReconcile";
 import { generateUuid } from "@/shared/utils/uuid";
@@ -64,6 +66,18 @@ async function processEntry(clientMessageId: string): Promise<void> {
             contentType: attachment.contentType,
             sizeBytes: attachment.sizeBytes,
             fileName: attachment.fileName,
+            transferComplete: attachment.transferComplete,
+            mediaId: attachment.mediaId,
+            initiatingGeneration: generation,
+            onTransferComplete: (mediaId, secureUrl) => {
+              if (stillOurSession()) {
+                useOutboxStore.getState().updateAttachment(clientMessageId, {
+                  transferComplete: true,
+                  mediaId,
+                  url: secureUrl,
+                });
+              }
+            },
           },
           (p) => {
             if (stillOurSession()) useOutboxStore.getState().update(clientMessageId, { progress: p });
@@ -73,17 +87,19 @@ async function processEntry(clientMessageId: string): Promise<void> {
         // Preserve the completed upload so a failed message send can retry
         // without uploading again.
         useOutboxStore.getState().updateAttachment(clientMessageId, {
+          transferComplete: true,
           mediaId: ready.id,
           url: ready.secureUrl ?? undefined,
         });
         attachment = useOutboxStore.getState().entries[clientMessageId]?.attachment;
       } catch (err) {
-        if (!stillOurSession()) return;
+        if (!stillOurSession() || err instanceof SessionMismatchError) return;
         if (isUploadKeyExhausted(err)) {
           // That upload authorisation expired / can't be reused — next retry
           // starts a fresh upload with a new idempotency key.
           useOutboxStore.getState().updateAttachment(clientMessageId, {
             clientUploadId: generateUuid(),
+            transferComplete: false,
           });
         }
         useOutboxStore.getState().update(clientMessageId, {
@@ -152,6 +168,10 @@ export function useSendMessage() {
     const user = useAuthStore.getState().user;
     const text = input.text?.trim() || null;
     if (!user || (!text && !input.file)) return null;
+
+    if (input.file) {
+      validateAttachment(input.file.contentType, input.file.sizeBytes);
+    }
 
     // Generated ONCE here; reused verbatim by every retry.
     const clientMessageId = generateUuid();

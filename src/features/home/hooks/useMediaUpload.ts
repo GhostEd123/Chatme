@@ -1,4 +1,5 @@
 import { apiRequest, ApiException } from "@/core/lib/apiClient";
+import { getCurrentSessionGeneration } from "@/core/lib/session";
 import type { MessageAttachment } from "@/features/home/hooks/useMessages";
 
 // ── API contract (GET /v1/docs) ──────────────────────────────────────────────
@@ -62,6 +63,13 @@ export class MediaValidationError extends Error {
   }
 }
 
+export class SessionMismatchError extends Error {
+  constructor(message = "Session changed during media upload.") {
+    super(message);
+    this.name = "SessionMismatchError";
+  }
+}
+
 /** Map a MIME type to the attachment category the API uses. */
 export function attachmentTypeFor(contentType: string): MessageAttachment["type"] {
   if (contentType.startsWith("image/")) return "image";
@@ -74,13 +82,13 @@ export function attachmentTypeFor(contentType: string): MessageAttachment["type"
 export function validateAttachment(contentType: string, sizeBytes: number): void {
   if (!(ALLOWED_CONTENT_TYPES as readonly string[]).includes(contentType)) {
     throw new MediaValidationError(
-      `This file type (${contentType || "unknown"}) can't be sent. Use JPEG/PNG/WebP images, MP4/MOV videos, common audio, PDF, TXT or Office documents.`
+      `This file type (${contentType || "unknown"}) can't be sent. Supported formats: JPEG, PNG, WebP, MP4, MOV, Audio, PDF, TXT, Word, Excel, PowerPoint.`
     );
   }
   const type = attachmentTypeFor(contentType);
   if (sizeBytes > MAX_BYTES[type]) {
     throw new MediaValidationError(
-      `This ${type} is too large (max ${MAX_BYTES[type] / MiB} MB).`
+      `This ${type} is too large (${(sizeBytes / MiB).toFixed(1)} MB). Maximum allowed is ${MAX_BYTES[type] / MiB} MB.`
     );
   }
 }
@@ -149,8 +157,13 @@ export function completeMediaUpload(mediaId: string): Promise<MediaAsset> {
 
 /**
  * Runs steps 1–3 and returns the verified (ready) media asset.
- * Idempotent per `clientUploadId`: if the same key already completed, the API
- * returns `upload: null` and we go straight to the ready asset.
+ *
+ * Checks session generation before and after every network request and await point.
+ * If the session transitions (e.g. Account A logs out and Account B signs in),
+ * it aborts immediately and never calls /complete under another account.
+ *
+ * If transfer to Cloudinary already succeeded in a prior attempt (transferComplete: true),
+ * skips re-transferring bytes and executes completion verification directly.
  */
 export async function uploadAttachment(
   params: {
@@ -159,31 +172,61 @@ export async function uploadAttachment(
     contentType: string;
     sizeBytes: number;
     fileName: string;
+    mediaId?: string;
+    transferComplete?: boolean;
+    initiatingGeneration?: number;
+    onTransferComplete?: (mediaId: string, secureUrl?: string) => void;
   },
   onProgress?: (fraction: number) => void
 ): Promise<MediaAsset> {
+  const generation = params.initiatingGeneration ?? getCurrentSessionGeneration();
+  const assertSession = () => {
+    if (getCurrentSessionGeneration() !== generation) {
+      throw new SessionMismatchError("Session changed during media upload.");
+    }
+  };
+
+  // Completion-only retry path: If Cloudinary transfer already succeeded, verify immediately!
+  if (params.transferComplete && params.mediaId) {
+    assertSession();
+    const ready = await completeMediaUpload(params.mediaId);
+    assertSession();
+    return ready;
+  }
+
+  assertSession();
   const created = await createMediaUpload({
     clientUploadId: params.clientUploadId,
     contentType: params.contentType,
     sizeBytes: params.sizeBytes,
     originalFilename: params.fileName,
   });
+  assertSession();
 
   if (created.media.status === "ready" && !created.upload) {
     onProgress?.(1);
+    params.onTransferComplete?.(created.media.id, created.media.secureUrl ?? undefined);
     return created.media;
   }
   if (!created.upload) {
     throw new Error("The server did not return upload authorization.");
   }
 
+  assertSession();
   await uploadToCloudinary(
     created.upload,
     { uri: params.uri, contentType: params.contentType, fileName: params.fileName },
     onProgress
   );
+  assertSession();
 
+  // Bytes successfully transferred to Cloudinary — persist this so retry is completion-only
+  params.onTransferComplete?.(created.media.id, created.media.secureUrl ?? undefined);
+
+  assertSession();
   const ready = await completeMediaUpload(created.media.id);
+  assertSession();
+
   if (ready.status !== "ready") {
     throw new Error("The upload could not be verified. Please try again.");
   }

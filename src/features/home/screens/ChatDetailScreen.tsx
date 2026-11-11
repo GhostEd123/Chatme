@@ -5,8 +5,7 @@ import { useMessages } from "@/features/home/hooks/useMessages";
 import { useSendMessage } from "@/features/home/hooks/useSendMessage";
 import { useMarkDelivered, useMarkRead } from "@/features/home/hooks/useReceipts";
 import { useConversationRealtime } from "@/features/home/hooks/useConversationRealtime";
-import { useSocketStore } from "@/core/store/socketStore";
-import { upsertMessageInCache } from "@/features/home/utils/messageReconcile";
+import { useDraftStore } from "@/features/home/store/draftStore";
 import Feather from "@expo/vector-icons/Feather";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
@@ -24,6 +23,7 @@ import {
   Animated,
   FlatList,
   Image,
+  Linking,
   Platform,
   ScrollView,
   Text,
@@ -34,16 +34,14 @@ import {
 } from "react-native";
 import { KeyboardStickyView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { withUniwind } from "uniwind";
 import type { Message } from "@/features/home/hooks/useMessages";
-
-const StyledFeather = withUniwind(Feather);
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface MediaMenuAction {
   icon: React.ComponentProps<typeof Feather>["name"];
   label: string;
   onPress: () => void;
+  disabled?: boolean;
 }
 
 // ── Screen ────────────────────────────────────────────────────────────────────
@@ -55,11 +53,23 @@ export default function ChatDetailScreen() {
   const { user } = useAuthStore();
   const currentUserId = user?.id ?? "";
 
-  const [message, setMessage] = useState("");
+  // ── Composer Draft Persistence ──
+  const draft = useDraftStore((s) => (conversationId ? s.drafts[conversationId] : undefined));
+  const setDraft = useDraftStore((s) => s.setDraft);
+  const clearDraft = useDraftStore((s) => s.clearDraft);
+
+  const [message, setMessage] = useState(draft || "");
   const [showMediaPanel, setShowMediaPanel] = useState(false);
-  const [recentPhotos, setRecentPhotos] = useState<{ id: string; uri: string }[]>([]);
+  const [recentPhotos, setRecentPhotos] = useState<{ id: string; uri: string; sizeBytes: number; filename: string }[]>([]);
   const [mediaPermission, setMediaPermission] = useState(false);
   const listRef = useRef<FlatList>(null);
+
+  // Sync state if draft loads
+  useEffect(() => {
+    if (draft && !message) {
+      setMessage(draft);
+    }
+  }, [draft, message]);
 
   // ── API hooks ──
   const {
@@ -74,8 +84,13 @@ export default function ChatDetailScreen() {
   const markDelivered = useMarkDelivered();
   const markRead = useMarkRead();
 
-  // ── Conversation metadata (name, avatar) ──
-  const { data: conversation } = useConversation(conversationId);
+  // ── Conversation metadata (name, avatar, permissions) ──
+  const {
+    data: conversation,
+    isLoading: conversationLoading,
+    isError: conversationError,
+  } = useConversation(conversationId);
+
   const otherParticipantMeta =
     conversation?.type === "direct" ? conversation.otherParticipant : null;
   const conversationName =
@@ -88,29 +103,6 @@ export default function ChatDetailScreen() {
   // ── Real-time ──
   const { typingUsers, participants, startTyping, stopTyping } =
     useConversationRealtime(conversationId);
-
-  // Incoming socket messages — merge into cache
-  const incomingMessages = useSocketStore((s) =>
-    conversationId ? s.incomingMessages[conversationId] : undefined
-  );
-  const clearIncoming = useSocketStore((s) => s.clearIncomingMessages);
-
-  useEffect(() => {
-    if (!incomingMessages || incomingMessages.length === 0) return;
-    incomingMessages.forEach((m) => {
-      upsertMessageInCache(conversationId!, {
-        id: m.id,
-        conversationId: m.conversationId,
-        clientMessageId: m.clientMessageId,
-        senderId: m.senderId,
-        kind: (m.kind as Message["kind"]) || "text",
-        text: m.text ?? null,
-        createdAt: m.createdAt,
-        status: "delivered",
-      });
-    });
-    clearIncoming(conversationId!);
-  }, [incomingMessages, conversationId, clearIncoming]);
 
   // Auto-mark delivered and read when new messages arrive from others
   useEffect(() => {
@@ -138,7 +130,7 @@ export default function ChatDetailScreen() {
 
   // ── Load recent photos when panel opens ──
   const loadRecentPhotos = async () => {
-    const { status } = await requestMediaPermissionsAsync();
+    const { status, canAskAgain } = await requestMediaPermissionsAsync();
     if (status === "granted") {
       setMediaPermission(true);
       try {
@@ -146,11 +138,25 @@ export default function ChatDetailScreen() {
           .limit(10)
           .eq(AssetField.MEDIA_TYPE, MediaType.IMAGE)
           .exe();
-        const withUris = await Promise.all(
-          assets.map(async (a) => ({ id: a.id, uri: await a.getUri() }))
+        const withDetails = await Promise.all(
+          assets.map(async (a) => ({
+            id: a.id,
+            uri: await a.getUri(),
+            sizeBytes: (a as any).fileSize || 500_000,
+            filename: (a as any).filename || `photo_${a.id}.jpg`,
+          }))
         );
-        setRecentPhotos(withUris);
+        setRecentPhotos(withDetails);
       } catch {}
+    } else if (!canAskAgain) {
+      Alert.alert(
+        "Photos Permission Required",
+        "Chatme needs permission to access your photo library. Please grant access in your device Settings.",
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Open Settings", onPress: () => Linking.openSettings() },
+        ]
+      );
     }
   };
 
@@ -187,6 +193,7 @@ export default function ChatDetailScreen() {
     if (!message.trim() || !conversationId) return;
     const text = message.trim();
     setMessage("");
+    if (conversationId) clearDraft(conversationId);
     sendMessage.send({ conversationId, text });
   };
 
@@ -199,6 +206,7 @@ export default function ChatDetailScreen() {
   // ── Typing ──
   const handleTextChange = (text: string) => {
     setMessage(text);
+    if (conversationId) setDraft(conversationId, text);
     if (text.trim()) {
       startTyping();
     } else {
@@ -209,12 +217,15 @@ export default function ChatDetailScreen() {
   // ── Pick and send image ──
   const handlePickImage = async () => {
     closePanel();
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    const { status, canAskAgain } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== "granted") {
       Alert.alert(
-        "Permission needed",
-        "Please allow photo access in Settings.",
-        [{ text: "OK" }]
+        "Permission Needed",
+        "Chatme needs access to your photos to send pictures. Please allow access in Settings.",
+        [
+          { text: "Cancel", style: "cancel" },
+          ...(canAskAgain ? [] : [{ text: "Open Settings", onPress: () => Linking.openSettings() }]),
+        ]
       );
       return;
     }
@@ -228,38 +239,48 @@ export default function ChatDetailScreen() {
     if (result.canceled || result.assets.length === 0 || !conversationId) return;
 
     const asset = result.assets[0];
-    sendMessage.send({
-      conversationId,
-      file: {
-        uri: asset.uri,
-        contentType: asset.mimeType ?? "image/jpeg",
-        sizeBytes: asset.fileSize ?? 1024,
-        fileName: asset.fileName ?? `photo_${Date.now()}.jpg`,
-        type: asset.type === "video" ? "video" : "image",
-      },
-    });
+    const estimatedSize = asset.fileSize || (asset.width && asset.height ? Math.round(asset.width * asset.height * 0.3) : 600_000);
+    try {
+      sendMessage.send({
+        conversationId,
+        file: {
+          uri: asset.uri,
+          contentType: asset.mimeType ?? "image/jpeg",
+          sizeBytes: estimatedSize,
+          fileName: asset.fileName ?? `photo_${Date.now()}.jpg`,
+          type: asset.type === "video" ? "video" : "image",
+        },
+      });
+    } catch (err: any) {
+      Alert.alert("Attachment Error", err?.message ?? "Invalid file.");
+    }
   };
 
   // ── Pick and send document ──
   const handlePickDocument = async () => {
     closePanel();
-    const result = await DocumentPicker.getDocumentAsync({
-      copyToCacheDirectory: true,
-    });
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        copyToCacheDirectory: true,
+      });
 
-    if (result.canceled || result.assets.length === 0 || !conversationId) return;
+      if (result.canceled || result.assets.length === 0 || !conversationId) return;
 
-    const asset = result.assets[0];
-    sendMessage.send({
-      conversationId,
-      file: {
-        uri: asset.uri,
-        contentType: asset.mimeType ?? "application/octet-stream",
-        sizeBytes: asset.size ?? 1024,
-        fileName: asset.name ?? `doc_${Date.now()}`,
-        type: "document",
-      },
-    });
+      const asset = result.assets[0];
+      const validSize = asset.size && asset.size > 0 ? asset.size : 100_000;
+      sendMessage.send({
+        conversationId,
+        file: {
+          uri: asset.uri,
+          contentType: asset.mimeType ?? "application/pdf",
+          sizeBytes: validSize,
+          fileName: asset.name ?? `document_${Date.now()}.pdf`,
+          type: "document",
+        },
+      });
+    } catch (err: any) {
+      Alert.alert("Document Error", err?.message ?? "Could not attach document.");
+    }
   };
 
   // ── Menu actions ──
@@ -276,11 +297,12 @@ export default function ChatDetailScreen() {
     },
     {
       icon: "map-pin",
-      label: "Location",
+      label: "Location (Coming Soon)",
       onPress: () => {
         closePanel();
-        Alert.alert("Location", "Location sharing coming soon!");
+        Alert.alert("Coming Soon", "Location sharing will be available in a future update.");
       },
+      disabled: true,
     },
     {
       icon: "user",
@@ -303,6 +325,31 @@ export default function ChatDetailScreen() {
   const typingOthers = typingUsers.filter((t) => t.userId !== currentUserId);
   const isOtherTyping = typingOthers.length > 0;
 
+  // ── Unavailable / Missing Conversation State ──
+  if (conversationError) {
+    return (
+      <View className="flex-1 bg-background items-center justify-center px-6">
+        <View className="w-16 h-16 rounded-full bg-red-100 items-center justify-center mb-4">
+          <Feather name="slash" size={32} color="#ef4444" />
+        </View>
+        <Text className="text-h3 font-display-bold text-foreground mb-2 text-center">
+          Conversation Unavailable
+        </Text>
+        <Text className="text-body-md text-muted text-center mb-6">
+          This conversation may have been deleted, or you don&apos;t have access to it.
+        </Text>
+        <TouchableOpacity
+          onPress={() => router.replace("/(tabs)/chats")}
+          className="bg-primary-400 px-6 py-3 rounded-full"
+          accessibilityLabel="Back to chats"
+          accessibilityRole="button"
+        >
+          <Text className="text-white font-display-bold text-body-md">Back to Chats</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
   return (
     <View className="flex-1 bg-background">
       {/* ── Header ── */}
@@ -310,7 +357,12 @@ export default function ChatDetailScreen() {
         className="px-4 pb-4 flex-row items-center bg-primary-400 dark:bg-surface"
         style={{ paddingTop: insets.top + 12 }}
       >
-        <TouchableOpacity onPress={() => router.back()} className="mr-3">
+        <TouchableOpacity
+          onPress={() => router.back()}
+          className="mr-3"
+          accessibilityLabel="Go back"
+          accessibilityRole="button"
+        >
           <Feather name="chevron-left" size={24} color="#fff" />
         </TouchableOpacity>
         <AvatarWidget
@@ -334,19 +386,21 @@ export default function ChatDetailScreen() {
           className="mr-5"
           accessibilityLabel="Start video call"
           accessibilityRole="button"
+          onPress={() => Alert.alert("Calls", "Video calling will be available soon.")}
         >
           <Feather name="video" size={20} color="#fff" />
         </TouchableOpacity>
         <TouchableOpacity
           accessibilityLabel="Start voice call"
           accessibilityRole="button"
+          onPress={() => Alert.alert("Calls", "Voice calling will be available soon.")}
         >
           <Feather name="phone" size={20} color="#fff" />
         </TouchableOpacity>
       </View>
 
       {/* ── Messages ── */}
-      {messagesLoading ? (
+      {messagesLoading || conversationLoading ? (
         <View className="flex-1 items-center justify-center">
           <ActivityIndicator size="large" color="#57b77d" />
         </View>
@@ -404,7 +458,15 @@ export default function ChatDetailScreen() {
 
                   {/* Document attachment */}
                   {isDoc && (
-                    <View className="flex-row items-center mb-2 p-2 bg-black/10 rounded-xl">
+                    <TouchableOpacity
+                      onPress={() => {
+                        const docUrl = item.attachments?.[0]?.url;
+                        if (docUrl) Linking.openURL(docUrl);
+                      }}
+                      className="flex-row items-center mb-2 p-2 bg-black/10 rounded-xl"
+                      accessibilityLabel="Open document"
+                      accessibilityRole="button"
+                    >
                       <Feather
                         name="file-text"
                         size={20}
@@ -418,7 +480,7 @@ export default function ChatDetailScreen() {
                       >
                         {item.localFileName || item.attachments?.[0]?.filename || "Document"}
                       </Text>
-                    </View>
+                    </TouchableOpacity>
                   )}
 
                   {/* Text */}
@@ -516,26 +578,37 @@ export default function ChatDetailScreen() {
                 <TouchableOpacity
                   onPress={async () => {
                     closePanel();
-                    const { status } =
+                    const { status, canAskAgain } =
                       await ImagePicker.requestCameraPermissionsAsync();
-                    if (status !== "granted") return;
+                    if (status !== "granted") {
+                      Alert.alert(
+                        "Camera Permission Required",
+                        "Chatme needs camera access to capture and send photos. Please allow access in Settings.",
+                        [
+                          { text: "Cancel", style: "cancel" },
+                          ...(canAskAgain ? [] : [{ text: "Open Settings", onPress: () => Linking.openSettings() }]),
+                        ]
+                      );
+                      return;
+                    }
                     const result = await ImagePicker.launchCameraAsync({ quality: 0.9 });
                     if (!result.canceled && result.assets.length > 0 && conversationId) {
                       const a = result.assets[0];
+                      const size = a.fileSize || (a.width && a.height ? Math.round(a.width * a.height * 0.3) : 500_000);
                       sendMessage.send({
                         conversationId,
                         file: {
                           uri: a.uri,
                           contentType: a.mimeType ?? "image/jpeg",
                           fileName: a.fileName ?? `photo_${Date.now()}.jpg`,
-                          sizeBytes: a.fileSize ?? 1024,
+                          sizeBytes: size,
                           type: "image",
                         },
                       });
                     }
                   }}
                   className="w-20 h-20 rounded-2xl bg-neutral-100 items-center justify-center border border-border/30 overflow-hidden"
-                  accessibilityLabel="Take a photo"
+                  accessibilityLabel="Take a photo with camera"
                   accessibilityRole="button"
                 >
                   <Feather name="camera" size={24} color="#57b77d" />
@@ -556,8 +629,8 @@ export default function ChatDetailScreen() {
                         file: {
                           uri: photo.uri,
                           contentType: "image/jpeg",
-                          fileName: `photo_${Date.now()}.jpg`,
-                          sizeBytes: 1024,
+                          fileName: photo.filename,
+                          sizeBytes: photo.sizeBytes,
                           type: "image",
                         },
                       });
@@ -588,8 +661,8 @@ export default function ChatDetailScreen() {
                 <TouchableOpacity
                   key={action.label}
                   onPress={action.onPress}
-                  activeOpacity={0.7}
-                  className="flex-row items-center px-5 py-3.5"
+                  activeOpacity={action.disabled ? 1 : 0.7}
+                  className={`flex-row items-center px-5 py-3.5 ${action.disabled ? "opacity-50" : ""}`}
                   accessibilityLabel={action.label}
                   accessibilityRole="button"
                 >
@@ -646,15 +719,15 @@ export default function ChatDetailScreen() {
               className="ml-2 mb-2"
               accessibilityLabel="Emoji picker"
               accessibilityRole="button"
+              onPress={() => Alert.alert("Emoji", "Emoji picker will be available in an upcoming update.")}
             >
               <Feather name="smile" size={20} color="#6e8597" />
             </TouchableOpacity>
           </View>
           <TouchableOpacity
-            onPress={handleSend}
-            disabled={!message.trim()}
+            onPress={message.trim() ? handleSend : () => Alert.alert("Voice Message", "Voice recording will be available in an upcoming update.")}
             className="ml-3 mb-1 w-10 h-10 bg-primary-400 rounded-full items-center justify-center"
-            accessibilityLabel={message.trim() ? "Send message" : "Record voice message"}
+            accessibilityLabel={message.trim() ? "Send message" : "Voice recording unavailable"}
             accessibilityRole="button"
             accessibilityState={{
               disabled: !message.trim(),

@@ -1,5 +1,3 @@
-import ChatLayoutWrapper from "@/shared/components/ChatLayoutWrapper";
-import Spacer from "@/shared/components/Spacer";
 import AvatarWidget from "@/shared/widgets/AvatarWidget";
 import { useRouter } from "expo-router";
 import { Text, View, TouchableOpacity, ScrollView, ActivityIndicator } from "react-native";
