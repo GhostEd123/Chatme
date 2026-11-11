@@ -2,7 +2,7 @@ import AvatarWidget from "@/shared/widgets/AvatarWidget";
 import { useAuthStore } from "@/features/auth/store/authStore";
 import { useConversation } from "@/features/home/hooks/useConversation";
 import { useMessages } from "@/features/home/hooks/useMessages";
-import { useSendMessage, createSendPayload } from "@/features/home/hooks/useSendMessage";
+import { useSendMessage } from "@/features/home/hooks/useSendMessage";
 import { useMarkDelivered, useMarkRead } from "@/features/home/hooks/useReceipts";
 import { useConversationRealtime } from "@/features/home/hooks/useConversationRealtime";
 import { useSocketStore } from "@/core/store/socketStore";
@@ -35,10 +35,11 @@ import {
 import { KeyboardStickyView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { withUniwind } from "uniwind";
+import type { Message } from "@/features/home/hooks/useMessages";
 
 const StyledFeather = withUniwind(Feather);
 
-// ── Menu action type ──────────────────────────────────────────────────────────
+// ── Types ─────────────────────────────────────────────────────────────────────
 interface MediaMenuAction {
   icon: React.ComponentProps<typeof Feather>["name"];
   label: string;
@@ -56,9 +57,7 @@ export default function ChatDetailScreen() {
 
   const [message, setMessage] = useState("");
   const [showMediaPanel, setShowMediaPanel] = useState(false);
-  const [recentPhotos, setRecentPhotos] = useState<
-    { id: string; uri: string }[]
-  >([]);
+  const [recentPhotos, setRecentPhotos] = useState<{ id: string; uri: string }[]>([]);
   const [mediaPermission, setMediaPermission] = useState(false);
   const listRef = useRef<FlatList>(null);
 
@@ -87,7 +86,8 @@ export default function ChatDetailScreen() {
       : "Chat";
 
   // ── Real-time ──
-  const { typingUsers, participants, startTyping, stopTyping } = useConversationRealtime(conversationId);
+  const { typingUsers, participants, startTyping, stopTyping } =
+    useConversationRealtime(conversationId);
 
   // Incoming socket messages — merge into cache
   const incomingMessages = useSocketStore((s) =>
@@ -103,7 +103,7 @@ export default function ChatDetailScreen() {
         conversationId: m.conversationId,
         clientMessageId: m.clientMessageId,
         senderId: m.senderId,
-        kind: (m.kind as any) || "text",
+        kind: (m.kind as Message["kind"]) || "text",
         text: m.text ?? null,
         createdAt: m.createdAt,
         status: "delivered",
@@ -114,7 +114,9 @@ export default function ChatDetailScreen() {
 
   // Auto-mark delivered and read when new messages arrive from others
   useEffect(() => {
-    const incoming = messages.filter((m) => m.senderId !== currentUserId && !!conversationId);
+    const incoming = messages.filter(
+      (m) => m.senderId !== currentUserId && !!conversationId
+    );
     if (incoming.length === 0 || !conversationId) return;
     const lastId = incoming[0].id;
     markDelivered.mutate({ conversationId, throughMessageId: lastId });
@@ -180,17 +182,21 @@ export default function ChatDetailScreen() {
     }
   };
 
-  // ── Send ──
+  // ── Send text ──
   const handleSend = () => {
     if (!message.trim() || !conversationId) return;
     const text = message.trim();
-    const payload = createSendPayload(conversationId, text);
-    // Only clear input optimistically — it's already added to cache by onMutate
     setMessage("");
-    sendMessage.mutate(payload);
+    sendMessage.send({ conversationId, text });
   };
 
-  // ── Typing (from realtime hook above) ──
+  // ── Retry ──
+  const handleRetry = (item: Message) => {
+    if (!item.clientMessageId) return;
+    sendMessage.retry(item.clientMessageId);
+  };
+
+  // ── Typing ──
   const handleTextChange = (text: string) => {
     setMessage(text);
     if (text.trim()) {
@@ -200,33 +206,73 @@ export default function ChatDetailScreen() {
     }
   };
 
+  // ── Pick and send image ──
+  const handlePickImage = async () => {
+    closePanel();
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== "granted") {
+      Alert.alert(
+        "Permission needed",
+        "Please allow photo access in Settings.",
+        [{ text: "OK" }]
+      );
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images", "videos"],
+      allowsEditing: false,
+      quality: 0.9,
+    });
+
+    if (result.canceled || result.assets.length === 0 || !conversationId) return;
+
+    const asset = result.assets[0];
+    sendMessage.send({
+      conversationId,
+      file: {
+        uri: asset.uri,
+        contentType: asset.mimeType ?? "image/jpeg",
+        sizeBytes: asset.fileSize ?? 1024,
+        fileName: asset.fileName ?? `photo_${Date.now()}.jpg`,
+        type: asset.type === "video" ? "video" : "image",
+      },
+    });
+  };
+
+  // ── Pick and send document ──
+  const handlePickDocument = async () => {
+    closePanel();
+    const result = await DocumentPicker.getDocumentAsync({
+      copyToCacheDirectory: true,
+    });
+
+    if (result.canceled || result.assets.length === 0 || !conversationId) return;
+
+    const asset = result.assets[0];
+    sendMessage.send({
+      conversationId,
+      file: {
+        uri: asset.uri,
+        contentType: asset.mimeType ?? "application/octet-stream",
+        sizeBytes: asset.size ?? 1024,
+        fileName: asset.name ?? `doc_${Date.now()}`,
+        type: "document",
+      },
+    });
+  };
+
   // ── Menu actions ──
   const menuActions: MediaMenuAction[] = [
     {
       icon: "image",
       label: "Photo or Gallery",
-      onPress: async () => {
-        closePanel();
-        const { status } =
-          await ImagePicker.requestMediaLibraryPermissionsAsync();
-        if (status !== "granted") {
-          Alert.alert("Permission needed", "Please allow photo access.");
-          return;
-        }
-        await ImagePicker.launchImageLibraryAsync({
-          mediaTypes: ["images", "videos"],
-          allowsEditing: false,
-          quality: 0.9,
-        });
-      },
+      onPress: handlePickImage,
     },
     {
       icon: "file-text",
       label: "Document",
-      onPress: async () => {
-        closePanel();
-        await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: false });
-      },
+      onPress: handlePickDocument,
     },
     {
       icon: "map-pin",
@@ -284,10 +330,17 @@ export default function ChatDetailScreen() {
               : "Offline"}
           </Text>
         </View>
-        <TouchableOpacity className="mr-5">
+        <TouchableOpacity
+          className="mr-5"
+          accessibilityLabel="Start video call"
+          accessibilityRole="button"
+        >
           <Feather name="video" size={20} color="#fff" />
         </TouchableOpacity>
-        <TouchableOpacity>
+        <TouchableOpacity
+          accessibilityLabel="Start voice call"
+          accessibilityRole="button"
+        >
           <Feather name="phone" size={20} color="#fff" />
         </TouchableOpacity>
       </View>
@@ -302,7 +355,7 @@ export default function ChatDetailScreen() {
           ref={listRef}
           data={messages}
           inverted
-          keyExtractor={(item) => item.id}
+          keyExtractor={(item) => item.clientMessageId || item.id}
           contentContainerStyle={{ padding: 16, paddingTop: 8 }}
           onEndReached={() => {
             if (hasNextPage && !isFetchingNextPage) fetchNextPage();
@@ -310,29 +363,77 @@ export default function ChatDetailScreen() {
           onEndReachedThreshold={0.3}
           renderItem={({ item }) => {
             const isMe = item.senderId === currentUserId;
-            const time = new Date(item.createdAt).toLocaleTimeString([], {
-              hour: "2-digit",
-              minute: "2-digit",
-            });
+            const isFailed = item.status === "failed";
+            const isUploading = item.status === "uploading";
+            const time = item.createdAt
+              ? new Date(item.createdAt).toLocaleTimeString([], {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })
+              : "";
+            const imageUri =
+              item.localPreviewUri ||
+              item.attachments?.find((a: any) => a.type === "image")?.url;
+            const isDoc = item.kind === "document";
+
             return (
               <View
                 className={`mb-4 max-w-[78%] ${isMe ? "self-end" : "self-start"}`}
+                accessible
+                accessibilityLabel={`${isMe ? "You" : conversationName}: ${item.text ?? (imageUri ? "Photo" : isDoc ? "Document" : "")}, sent at ${time}${isFailed ? ", failed to send" : ""}`}
               >
                 <View
                   className={`px-4 py-3 rounded-2xl ${
                     isMe
-                      ? "bg-primary-400 rounded-tr-sm"
+                      ? isFailed
+                        ? "bg-red-100 rounded-tr-sm border border-red-300"
+                        : "bg-primary-400 rounded-tr-sm"
                       : "bg-surface border border-border/50 rounded-tl-sm"
                   }`}
                 >
-                  <Text
-                    className={`text-body-md font-display-medium ${
-                      isMe ? "text-white" : "text-foreground"
-                    }`}
-                  >
-                    {item.text}
-                  </Text>
+                  {/* Image attachment */}
+                  {imageUri && (
+                    <View className="mb-2 rounded-xl overflow-hidden bg-neutral-200">
+                      <Image
+                        source={{ uri: imageUri }}
+                        style={{ width: 220, height: 160 }}
+                        resizeMode="cover"
+                      />
+                    </View>
+                  )}
+
+                  {/* Document attachment */}
+                  {isDoc && (
+                    <View className="flex-row items-center mb-2 p-2 bg-black/10 rounded-xl">
+                      <Feather
+                        name="file-text"
+                        size={20}
+                        color={isMe && !isFailed ? "#fff" : "#111827"}
+                      />
+                      <Text
+                        className={`ml-2 text-body-sm font-display-medium flex-1 ${
+                          isMe && !isFailed ? "text-white" : "text-foreground"
+                        }`}
+                        numberOfLines={1}
+                      >
+                        {item.localFileName || item.attachments?.[0]?.filename || "Document"}
+                      </Text>
+                    </View>
+                  )}
+
+                  {/* Text */}
+                  {!!item.text && (
+                    <Text
+                      className={`text-body-md font-display-medium ${
+                        isMe && !isFailed ? "text-white" : "text-foreground"
+                      }`}
+                    >
+                      {item.text}
+                    </Text>
+                  )}
                 </View>
+
+                {/* Subtext info (time, status icon, retry) */}
                 <View
                   className={`flex-row items-center mt-1 gap-1 ${
                     isMe ? "justify-end" : "justify-start"
@@ -342,15 +443,30 @@ export default function ChatDetailScreen() {
                   {isMe && (
                     <Feather
                       name={
-                        item.status === "sending"
+                        isUploading
+                          ? "upload-cloud"
+                          : item.status === "sending"
                           ? "clock"
-                          : item.status === "failed"
+                          : isFailed
                           ? "alert-circle"
                           : "check-circle"
                       }
                       size={11}
-                      color={item.status === "failed" ? "#ef4444" : "#57b77d"}
+                      color={isFailed ? "#ef4444" : "#57b77d"}
                     />
+                  )}
+                  {/* Retry button for failed messages */}
+                  {isMe && isFailed && (
+                    <TouchableOpacity
+                      onPress={() => handleRetry(item)}
+                      accessibilityLabel="Retry sending this message"
+                      accessibilityRole="button"
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    >
+                      <Text className="text-body-xs text-red-500 font-display-bold ml-1">
+                        Retry
+                      </Text>
+                    </TouchableOpacity>
                   )}
                 </View>
               </View>
@@ -361,8 +477,14 @@ export default function ChatDetailScreen() {
               <View className="self-start bg-surface border border-border/50 rounded-2xl rounded-tl-sm px-4 py-3 mb-4 mt-2">
                 <View className="flex-row gap-1 items-center">
                   <View className="w-2 h-2 rounded-full bg-muted animate-bounce" />
-                  <View className="w-2 h-2 rounded-full bg-muted animate-bounce" style={{ animationDelay: "150ms" }} />
-                  <View className="w-2 h-2 rounded-full bg-muted animate-bounce" style={{ animationDelay: "300ms" }} />
+                  <View
+                    className="w-2 h-2 rounded-full bg-muted animate-bounce"
+                    style={{ animationDelay: "150ms" } as any}
+                  />
+                  <View
+                    className="w-2 h-2 rounded-full bg-muted animate-bounce"
+                    style={{ animationDelay: "300ms" } as any}
+                  />
                 </View>
               </View>
             ) : null
@@ -397,9 +519,24 @@ export default function ChatDetailScreen() {
                     const { status } =
                       await ImagePicker.requestCameraPermissionsAsync();
                     if (status !== "granted") return;
-                    await ImagePicker.launchCameraAsync({ quality: 0.9 });
+                    const result = await ImagePicker.launchCameraAsync({ quality: 0.9 });
+                    if (!result.canceled && result.assets.length > 0 && conversationId) {
+                      const a = result.assets[0];
+                      sendMessage.send({
+                        conversationId,
+                        file: {
+                          uri: a.uri,
+                          contentType: a.mimeType ?? "image/jpeg",
+                          fileName: a.fileName ?? `photo_${Date.now()}.jpg`,
+                          sizeBytes: a.fileSize ?? 1024,
+                          type: "image",
+                        },
+                      });
+                    }
                   }}
                   className="w-20 h-20 rounded-2xl bg-neutral-100 items-center justify-center border border-border/30 overflow-hidden"
+                  accessibilityLabel="Take a photo"
+                  accessibilityRole="button"
                 >
                   <Feather name="camera" size={24} color="#57b77d" />
                 </TouchableOpacity>
@@ -409,6 +546,22 @@ export default function ChatDetailScreen() {
                   <TouchableOpacity
                     key={photo.id}
                     className="w-20 h-20 rounded-2xl overflow-hidden"
+                    accessibilityLabel="Select this photo"
+                    accessibilityRole="button"
+                    onPress={() => {
+                      closePanel();
+                      if (!conversationId) return;
+                      sendMessage.send({
+                        conversationId,
+                        file: {
+                          uri: photo.uri,
+                          contentType: "image/jpeg",
+                          fileName: `photo_${Date.now()}.jpg`,
+                          sizeBytes: 1024,
+                          type: "image",
+                        },
+                      });
+                    }}
                   >
                     <Image
                       source={{ uri: photo.uri }}
@@ -437,6 +590,8 @@ export default function ChatDetailScreen() {
                   onPress={action.onPress}
                   activeOpacity={0.7}
                   className="flex-row items-center px-5 py-3.5"
+                  accessibilityLabel={action.label}
+                  accessibilityRole="button"
                 >
                   <View className="w-9 h-9 rounded-full bg-primary/10 items-center justify-center mr-4">
                     <Feather name={action.icon} size={18} color="#57b77d" />
@@ -455,7 +610,13 @@ export default function ChatDetailScreen() {
           className="px-4 py-3 bg-surface border-t border-border/50 flex-row items-end"
           style={{ paddingBottom: insets.bottom + 12 }}
         >
-          <TouchableOpacity onPress={togglePanel} className="mr-3 mb-2">
+          <TouchableOpacity
+            onPress={togglePanel}
+            className="mr-3 mb-2"
+            accessibilityLabel={showMediaPanel ? "Close attachment menu" : "Open attachment menu"}
+            accessibilityRole="button"
+            accessibilityState={{ expanded: showMediaPanel }}
+          >
             <Feather
               name={showMediaPanel ? "x-circle" : "paperclip"}
               size={22}
@@ -479,25 +640,31 @@ export default function ChatDetailScreen() {
               onFocus={() => {
                 if (showMediaPanel) closePanel();
               }}
+              accessibilityLabel="Message input"
             />
-            <TouchableOpacity className="ml-2 mb-2">
+            <TouchableOpacity
+              className="ml-2 mb-2"
+              accessibilityLabel="Emoji picker"
+              accessibilityRole="button"
+            >
               <Feather name="smile" size={20} color="#6e8597" />
             </TouchableOpacity>
           </View>
           <TouchableOpacity
             onPress={handleSend}
-            disabled={sendMessage.isPending}
+            disabled={!message.trim()}
             className="ml-3 mb-1 w-10 h-10 bg-primary-400 rounded-full items-center justify-center"
+            accessibilityLabel={message.trim() ? "Send message" : "Record voice message"}
+            accessibilityRole="button"
+            accessibilityState={{
+              disabled: !message.trim(),
+            }}
           >
-            {sendMessage.isPending ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : (
-              <Feather
-                name={message.trim() ? "send" : "mic"}
-                size={18}
-                color="#fff"
-              />
-            )}
+            <Feather
+              name={message.trim() ? "send" : "mic"}
+              size={18}
+              color="#fff"
+            />
           </TouchableOpacity>
         </View>
       </KeyboardStickyView>

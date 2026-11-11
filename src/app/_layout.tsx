@@ -49,10 +49,8 @@ export default function RootLayout() {
           <Stack.Screen name="index" options={{ headerShown: false }} />
           <Stack.Screen name="(auth)" options={{ headerShown: false }} />
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-          <Stack.Screen name="chats/archived" options={{ headerShown: false }} />
-          {/* Sub-screens rendered outside (tabs) so the tab bar never shows */}
-          <Stack.Screen name="chats/[id]" options={{ headerShown: false }} />
-          <Stack.Screen name="chats/new" options={{ headerShown: false }} />
+          {/* chats/ has its own auth-guarded _layout */}
+          <Stack.Screen name="chats" options={{ headerShown: false }} />
           <Stack.Screen name="contacts/new" options={{ headerShown: false }} />
           <Stack.Screen name="settings/appearance" options={{ headerShown: false }} />
           <Stack.Screen name="settings/profile" options={{ headerShown: false }} />

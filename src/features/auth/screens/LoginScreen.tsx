@@ -28,7 +28,7 @@ const LoginScreen = () => {
     mode: "onChange",
   });
   const router = useRouter();
-  const { updateUser, setChallengeId } = useAuthStore();
+  const { setOnboarding } = useAuthStore();
   const requestOtp = useRequestOtp();
 
   const onSubmit = async (data: LoginFormOutput) => {
@@ -37,11 +37,11 @@ const LoginScreen = () => {
       digits = digits.substring(1);
     }
     const e164 = `${data.country.dialCode}${digits}`;
-    updateUser({ phone: e164 });
 
     try {
       const res = await requestOtp.mutateAsync({ phoneNumber: e164 });
-      setChallengeId(res.challengeId);
+      // Store phone + challengeId in transient onboarding state (not persisted)
+      setOnboarding(e164, res.challengeId);
       router.navigate("/(auth)/verify");
     } catch (err: any) {
       Alert.alert(

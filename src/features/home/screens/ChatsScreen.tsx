@@ -1,6 +1,5 @@
 import { useAuthStore } from "@/features/auth/store/authStore";
-import { useChatStore } from "@/features/home/store/chatStore";
-import { usePinConversation, useArchiveConversation, useMuteConversation } from "@/features/home/hooks/useConversationSettings";
+import { usePinConversation, useArchiveConversation, useMuteConversation, useDeleteConversation } from "@/features/home/hooks/useConversationSettings";
 import { useConversations, useArchivedConversations, getConversationDisplay } from "@/features/home/hooks/useConversations";
 import ThemedButton from "@/shared/components/ThemedButton";
 import ChatListItemWidget from "@/shared/widgets/ChatListItemWidget";
@@ -10,6 +9,7 @@ import { useRouter } from "expo-router";
 import React, { useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Animated,
   FlatList,
   Modal,
@@ -71,11 +71,11 @@ function SpeedDialItem({
 export default function ChatsScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  // Legacy mock store action for delete (still comes from chatStore)
-  const { deleteChat } = useChatStore();
+  // Real API-backed mutations
   const { mutate: pinChat } = usePinConversation();
   const { mutate: archiveChat } = useArchiveConversation();
   const { mutate: muteChat } = useMuteConversation();
+  const { mutate: deleteConversation } = useDeleteConversation();
   const { user, updateUser } = useAuthStore();
 
   // Theme colour
@@ -225,57 +225,6 @@ export default function ChatsScreen() {
     outputRange: ["0deg", "45deg"],
   });
 
-  const handleUnlockNumpadPress = (val: string) => {
-    if (unlockPinInput.length < 4) {
-      setUnlockError(false);
-      const newPin = unlockPinInput + val;
-      setUnlockPinInput(newPin);
-      if (newPin.length === 4) {
-        if (newPin === savedPin) {
-          setAppLockedState("unlocked");
-          setUnlockPinInput("");
-        } else {
-          setUnlockError(true);
-          setTimeout(() => setUnlockPinInput(""), 400);
-        }
-      }
-    }
-  };
-
-  const handleUnlockBackspace = () => {
-    setUnlockPinInput((prev) => prev.slice(0, -1));
-    setUnlockError(false);
-  };
-
-  if (appLockedState === "checking") {
-    return (
-      <View className="flex-1 bg-background items-center justify-center">
-        <ActivityIndicator size="large" color="#57b77d" />
-      </View>
-    );
-  }
-
-  if (appLockedState === "locked") {
-    return (
-      <View className="flex-1 bg-background" style={{ paddingTop: insets.top }}>
-        <StatusBar style="dark" />
-        <View className="px-6 pt-16 flex-1 items-center">
-          <View className="bg-primary/10 size-16 rounded-3xl items-center justify-center mb-6">
-            <StyledFeather name="lock" size={28} colorClassName="accent-primary-400" />
-          </View>
-          <Text className="text-h3 font-display-bold text-neutral-900 dark:text-white mb-2 text-center">
-            Enter your pin
-          </Text>
-          <Text className="text-body-md font-display-medium text-neutral-500 text-center mb-10">
-            {unlockError ? "Incorrect pin. Try again." : "Unlock ChatMe to view your messages."}
-          </Text>
-          <PinDotsWidget length={4} value={unlockPinInput} />
-        </View>
-        <NumpadWidget onPress={handleUnlockNumpadPress} onBackspace={handleUnlockBackspace} />
-      </View>
-    );
-  }
-
   return (
     <View className="flex-1 bg-background">
       <StatusBar style="light" />
@@ -345,7 +294,30 @@ export default function ChatsScreen() {
               onPress={() => router.push(`/chats/${item.id}`)}
               onMute={() => muteChat({ id: item.id, mute: !item.isMuted })}
               onPin={() => pinChat({ id: item.id, pin: !item.isPinned })}
-              onDelete={() => deleteChat(item.id)}
+              onDelete={() => {
+                Alert.alert(
+                  "Delete conversation",
+                  "This will permanently delete this conversation. Continue?",
+                  [
+                    { text: "Cancel", style: "cancel" },
+                    {
+                      text: "Delete",
+                      style: "destructive",
+                      onPress: () =>
+                        deleteConversation(
+                          { id: item.id },
+                          {
+                            onError: () =>
+                              Alert.alert(
+                                "Error",
+                                "Could not delete the conversation. Please try again."
+                              ),
+                          }
+                        ),
+                    },
+                  ]
+                );
+              }}
               onArchive={() => archiveChat({ id: item.id, archive: !item.isArchived })}
             />
           )}

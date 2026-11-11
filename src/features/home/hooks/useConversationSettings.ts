@@ -1,4 +1,5 @@
 import { apiRequest } from "@/core/lib/apiClient";
+import { useAuthStore } from "@/features/auth/store/authStore";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 export function usePinConversation() {
@@ -54,6 +55,30 @@ export function useMuteConversation() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["conversations"] });
       queryClient.invalidateQueries({ queryKey: ["archivedConversations"] });
+    },
+  });
+}
+
+export function useDeleteConversation() {
+  const queryClient = useQueryClient();
+  const userId = useAuthStore((s) => s.user?.id ?? "");
+
+  return useMutation({
+    mutationFn: async ({ id }: { id: string }) => {
+      return apiRequest(`/conversations/${id}`, { method: "DELETE" });
+    },
+    onSuccess: (_data, { id }) => {
+      // Optimistically remove from the conversations list
+      queryClient.setQueryData<import("@/features/home/hooks/useConversations").Conversation[]>(
+        ["conversations", userId],
+        (old) => (old ? old.filter((c) => c.id !== id) : old)
+      );
+      queryClient.invalidateQueries({ queryKey: ["conversations", userId] });
+      queryClient.invalidateQueries({ queryKey: ["archivedConversations", userId] });
+    },
+    onError: (err: Error) => {
+     
+      throw err;
     },
   });
 }

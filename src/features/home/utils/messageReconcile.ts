@@ -1,30 +1,38 @@
 import { queryClient } from "@/core/lib/queryClient";
+import { useAuthStore } from "@/features/auth/store/authStore";
 import type { InfiniteData } from "@tanstack/react-query";
-import type { Message, MessagesResponse } from "../hooks/useMessages";
+import {
+  messagesQueryKey,
+  type Message,
+  type MessagesResponse,
+} from "../hooks/useMessages";
 
 /**
- * Upserts a message into the infinite query cache for a conversation.
- * Matches by `id` (server ID) or `clientMessageId`.
- * If found, updates the existing entry. If not found, prepends to the first page.
- * Maintains latest-first ordering within each page.
+ * Upserts a message into the account-scoped infinite query cache for a
+ * conversation. This is the ONE reconciliation path used by the send-response
+ * handler, socket `message.created` events and retries.
+ *
+ * Matches by server `id` or `clientMessageId`, so whichever of the HTTP
+ * response / socket echo arrives first, the other merges into the same entry.
+ * If not found, prepends to the first page (newest-first ordering).
+ *
+ * @param userId account that owns the cache entry. Defaults to the current
+ *   user; pass it explicitly from async work that captured it earlier so a
+ *   late result can never land in another account's cache.
  */
 export function upsertMessageInCache(
   conversationId: string,
-  message: Message
+  message: Message,
+  userId: string = useAuthStore.getState().user?.id ?? ""
 ): void {
+  if (!userId) return;
   queryClient.setQueryData<InfiniteData<MessagesResponse>>(
-    ["messages", conversationId],
+    messagesQueryKey(userId, conversationId),
     (old) => {
-      if (!old) {
-        return {
-          pages: [
-            {
-              items: [message],
-              pageInfo: { nextCursor: null, hasNextPage: false },
-            },
-          ],
-          pageParams: [null],
-        };
+      if (!old || old.pages.length === 0) {
+        // No history loaded yet — let the next fetch populate it rather than
+        // seeding a fake single-page history.
+        return old;
       }
 
       let found = false;
@@ -37,7 +45,6 @@ export function upsertMessageInCache(
             existing.clientMessageId === message.clientMessageId;
           if (matchById || matchByClientId) {
             found = true;
-            // Merge: server data wins over optimistic, but preserve status
             return { ...existing, ...message };
           }
           return existing;
@@ -46,41 +53,13 @@ export function upsertMessageInCache(
       });
 
       if (!found) {
-        // Prepend to first page (latest-first ordering)
         const [firstPage, ...rest] = newPages;
         return {
           ...old,
-          pages: [
-            { ...firstPage, items: [message, ...firstPage.items] },
-            ...rest,
-          ],
+          pages: [{ ...firstPage, items: [message, ...firstPage.items] }, ...rest],
         };
       }
 
-      return { ...old, pages: newPages };
-    }
-  );
-}
-
-/**
- * Mark a message by clientMessageId as failed in the cache.
- */
-export function markMessageFailed(
-  conversationId: string,
-  clientMessageId: string
-): void {
-  queryClient.setQueryData<InfiniteData<MessagesResponse>>(
-    ["messages", conversationId],
-    (old) => {
-      if (!old) return old;
-      const newPages = old.pages.map((page) => ({
-        ...page,
-        items: page.items.map((m) =>
-          m.clientMessageId === clientMessageId
-            ? { ...m, status: "failed" as const }
-            : m
-        ),
-      }));
       return { ...old, pages: newPages };
     }
   );

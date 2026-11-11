@@ -27,8 +27,6 @@ interface VerifyOtpResponse {
 }
 
 export function useVerifyOtp() {
-  const { setTokens, setUser } = useAuthStore.getState();
-
   return useMutation<VerifyOtpResponse, Error, VerifyOtpInput>({
     mutationFn: (input) =>
       apiRequest<VerifyOtpResponse>("/auth/otp/verify", {
@@ -37,10 +35,10 @@ export function useVerifyOtp() {
         skipAuth: true,
       }),
     onSuccess: (data) => {
-      // Persist tokens
-      setTokens(data.accessToken, data.refreshToken);
-      // Persist user (map from API shape to store shape)
-      setUser({
+      // Start a fresh session atomically (tokens + identity). This bumps the
+      // session generation so any refresh / reconnect still pending for a
+      // previously signed-in account cannot touch this session.
+      useAuthStore.getState().startSession(data.accessToken, data.refreshToken, {
         id: data.user.id,
         name: data.user.displayName ?? "",
         phone: data.user.phoneNumber,

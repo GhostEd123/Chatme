@@ -9,7 +9,9 @@ import { useAuthStore } from "../store/authStore";
 
 const VerifyScreen = () => {
   const router = useRouter();
-  const { user, challengeId, setChallengeId } = useAuthStore();
+  const { onboarding, clearOnboarding } = useAuthStore();
+  const challengeId = onboarding?.challengeId ?? null;
+  const phone = onboarding?.phone ?? "";
   const [code, setCode] = useState("");
   const verifyOtp = useVerifyOtp();
 
@@ -36,12 +38,11 @@ const VerifyScreen = () => {
         },
       });
 
-      // Clear challengeId once used
-      setChallengeId(null);
+      // Clear transient onboarding state once used
+      clearOnboarding();
 
       // If profile is complete navigate to app, else continue setup
       if (result.user.profileComplete && result.user.displayName) {
-        // router.replace("/(tabs)" as any);
         router.replace("/chats");
       } else {
         router.push("/(auth)/name");
@@ -58,7 +59,7 @@ const VerifyScreen = () => {
     <Text className="text-body-md font-display-regular text-neutral-300 dark:text-neutral-200 mt-2">
       Enter the code number we sent to{" "}
       <Text className="text-body-md font-display-medium text-neutral-600 dark:text-white/90 mt-2">
-        {user?.phone}
+        {phone}
       </Text>
     </Text>
   );
